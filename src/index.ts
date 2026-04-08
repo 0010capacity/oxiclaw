@@ -61,7 +61,17 @@ import {
 } from './sender-allowlist.js';
 import { startHealthChecker } from './health-checker.js';
 import { startSessionCleanup } from './session-cleanup.js';
-import { discoverAgents } from './agent-manager.js';
+import {
+  discoverAgents,
+  getActiveAgents,
+  setAgentStatus,
+  setContainerRunning,
+  setContainerStopped,
+  touchAgent,
+} from './agent-manager.js';
+import {
+  loadSystemPrompt,
+} from './persona-loader.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -693,7 +703,8 @@ async function main(): Promise<void> {
     },
     sendFile: (jid, filePath, caption) => {
       const channel = findChannel(channels, jid);
-      if (!channel?.sendFile) throw new Error(`Channel does not support sendFile`);
+      if (!channel?.sendFile)
+        throw new Error(`Channel does not support sendFile`);
       return channel.sendFile(jid, filePath, caption);
     },
     registeredGroups: () => registeredGroups,
@@ -735,15 +746,137 @@ async function main(): Promise<void> {
   if (swarmRouter) {
     swarmRouter.onRoute(async (msg) => {
       logger.info(
-        { agentName: msg.agentName, chatJid: msg.chatJid, isAll: msg.isAllMention },
+        {
+          agentName: msg.agentName,
+          chatJid: msg.chatJid,
+          isAll: msg.isAllMention,
+        },
         'SwarmRouter routing message to pi-mono container via IPC',
       );
-      // Route the message to the appropriate agent container via IPC.
-      // The IPC watcher handles task files in DATA_DIR/ipc/{groupFolder}/tasks/.
-      // TODO: implement JSON-RPC prompt writing and response waiting for agent routing
+
+      const group = registeredGroups[msg.chatJid];
+      if (!group) {
+        logger.warn({ chatJid: msg.chatJid }, 'Swarm route: group not registered');
+        return;
+      }
+
+      // Build the full prompt with sender context and agent mention
+      const fullPrompt = `[To: @agent_${msg.agentName}]\nFrom: ${msg.sender}\n\n${msg.prompt}`;
+
+      // Load the agent's persona system prompt
+      const systemPrompt = loadSystemPrompt(msg.chatJid, msg.agentName);
+
+      // Combine system prompt + user prompt for the container
+      const containerPrompt = `${systemPrompt}\n\n---\nUser message:\n${fullPrompt}`;
+
+      // For mention-all, route to all active agents in parallel
+      // For single agent, route to just that agent
+      const agentNames = msg.isAllMention
+        ? getActiveAgents(msg.chatJid).map((a) => a.name)
+        : [msg.agentName];
+
+      const results = await Promise.allSettled(
+        agentNames.map((agentName) => {
+          // Mark agent as busy
+          setAgentStatus(msg.chatJid, agentName, 'busy');
+          touchAgent(msg.chatJid, agentName);
+
+          return runContainerAgent(
+            group,
+            {
+              prompt: containerPrompt,
+              sessionId: agentName,
+              groupFolder: group.folder,
+              chatJid: msg.chatJid,
+              isMain: group.isMain === true,
+              assistantName: ASSISTANT_NAME,
+            },
+            (_proc, _containerName) => {
+              // Register process with the group queue so it can be tracked
+              // The swarm router uses ephemeral containers, not queue-managed ones,
+              // so this is a no-op for swarm routing (queue checks for existing containers)
+              setContainerRunning(msg.chatJid, _containerName);
+            },
+            async (output) => {
+              // Streaming output callback — deliver each result to Telegram as it arrives
+              if (output.result) {
+                const text = output.result.replace(
+                  /<internal>[\s\S]*?<\/internal>/g,
+                  '',
+                ).trim();
+                if (text) {
+                  await swarmRouter!.deliverResponse(
+                    msg.chatJid,
+                    agentName,
+                    text,
+                    msg.messageId,
+                  );
+                }
+              }
+              if (output.status === 'success') {
+                setAgentStatus(msg.chatJid, agentName, 'idle');
+              }
+              if (output.status === 'error') {
+                setAgentStatus(msg.chatJid, agentName, 'error');
+                logger.error(
+                  { agentName, chatJid: msg.chatJid, error: output.error },
+                  'Swarm agent error',
+                );
+                // Send error message to Telegram
+                await swarmRouter!.deliverResponse(
+                  msg.chatJid,
+                  agentName,
+                  `Error: ${output.error || 'Unknown error'}`,
+                  msg.messageId,
+                );
+              }
+            },
+          ).then(async (output) => {
+            // Final cleanup after container exits
+            setAgentStatus(msg.chatJid, agentName, 'idle');
+            setContainerStopped(msg.chatJid);
+
+            // If there was a final result not already sent via streaming (result is null on success after streaming)
+            if (output.status === 'error') {
+              logger.error(
+                { agentName, chatJid: msg.chatJid, error: output.error },
+                'Swarm agent container error',
+              );
+            }
+          }).catch((err) => {
+            // Handle promise rejection (container spawn failure, etc.)
+            setAgentStatus(msg.chatJid, agentName, 'error');
+            setContainerStopped(msg.chatJid);
+            logger.error(
+              { agentName, chatJid: msg.chatJid, err },
+              'Swarm agent container spawn error',
+            );
+            swarmRouter!.deliverResponse(
+              msg.chatJid,
+              agentName,
+              `Error: ${err instanceof Error ? err.message : String(err)}`,
+              msg.messageId,
+            ).catch((e) =>
+              logger.error({ err: e }, 'Failed to deliver error to Telegram')
+            );
+          });
+        }),
+      );
+
+      // Log any failed agent routes
+      for (const [i, r] of results.entries()) {
+        if (r.status === 'rejected') {
+          logger.error(
+            { agentName: agentNames[i], reason: r.reason },
+            'Swarm route promise rejected',
+          );
+        }
+      }
     });
   } else {
-    logger.debug('SwarmRouter not initialized yet (Telegram channel may not be connected)');
+    logger.debug(
+      'SwarmRouter not initialized yet (Telegram channel may not be connected)',
+    );
   }
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');

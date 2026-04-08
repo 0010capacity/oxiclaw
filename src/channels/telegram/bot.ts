@@ -79,7 +79,8 @@ function toNewMessage(ctx: Context, isBot = false): NewMessage | null {
     msg.from?.first_name ||
     msg.from?.last_name ||
     'unknown';
-  const content = msg.text || msg.caption || '';
+  const content =
+    'text' in msg ? msg.text : 'caption' in msg ? msg.caption : '';
 
   if (!content) return null;
 
@@ -92,16 +93,20 @@ function toNewMessage(ctx: Context, isBot = false): NewMessage | null {
     timestamp: new Date((msg.date || 0) * 1000).toISOString(),
     is_from_me: isBot,
     is_bot_message: isBot,
-    reply_to_message_id: msg.reply_to_message
-      ? String(msg.reply_to_message.message_id)
-      : undefined,
+    reply_to_message_id:
+      'reply_to_message' in msg && msg.reply_to_message
+        ? String(msg.reply_to_message.message_id)
+        : undefined,
     reply_to_message_content:
-      (msg.reply_to_message as typeof msg.reply_to_message & { text?: string })
-        ?.text || undefined,
+      'reply_to_message' in msg && msg.reply_to_message
+        ? (msg.reply_to_message as { text?: string }).text
+        : undefined,
     reply_to_sender_name:
-      msg.reply_to_message?.from?.username ||
-      msg.reply_to_message?.from?.first_name ||
-      undefined,
+      'reply_to_message' in msg && msg.reply_to_message
+        ? msg.reply_to_message.from?.username ||
+          msg.reply_to_message.from?.first_name ||
+          undefined
+        : undefined,
   };
 }
 
@@ -152,7 +157,13 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
       const chatName = (ctx.chat as { title?: string })?.title || undefined;
       const isGroup =
         ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
-      opts.onChatMetadata(chatId, newMsg.timestamp, chatName, 'telegram', isGroup);
+      opts.onChatMetadata(
+        chatId,
+        newMsg.timestamp,
+        chatName,
+        'telegram',
+        isGroup,
+      );
 
       // Only process messages for registered groups
       const groups = registeredGroups();
@@ -203,7 +214,8 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
 
       // Download and encode the largest photo
       let image_base64: string | undefined;
-      const photos = (ctx.message as { photo?: Array<{ file_id: string }> }).photo;
+      const photos = (ctx.message as { photo?: Array<{ file_id: string }> })
+        .photo;
       if (photos && photos.length > 0) {
         try {
           // Get the largest photo size (last in array)
@@ -247,13 +259,15 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
 
   // /meeting command — triggers agent meeting (Phase 3)
   bot.command('meeting', async (ctx: Context) => {
-    const text = ctx.message?.text || '';
+    const text =
+      'text' in (ctx.message || {})
+        ? (ctx.message as { text?: string }).text || ''
+        : '';
     const agenda = text.replace('/meeting', '').trim();
 
     if (!agenda) {
       await ctx.reply(
-        'Usage: /meeting <agenda>\n' +
-        'Example: /meeting Discuss Q3 strategy',
+        'Usage: /meeting <agenda>\n' + 'Example: /meeting Discuss Q3 strategy',
       );
       return;
     }
@@ -274,9 +288,7 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
       if (agentList.length === 0) {
         await ctx.reply('No agents registered in this group.');
       } else {
-        const lines = agentList.map(
-          (a) => `- @agent_${a.name} (${a.role})`,
-        );
+        const lines = agentList.map((a) => `- @agent_${a.name} (${a.role})`);
         await ctx.reply(`Agents in this group:\n${lines.join('\n')}`);
       }
     } else {
@@ -288,13 +300,15 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
   registerExtensionCommands(bot);
 
   // Register bot commands with Telegram
-  bot.telegram.setMyCommands([
-    { command: 'meeting', description: 'Start an agent meeting' },
-    { command: 'agents', description: 'List agents in this group' },
-    { command: 'extension', description: 'Manage extensions' },
-  ]).catch((err: unknown) => {
-    logger.warn({ err }, 'Failed to set Telegram bot commands');
-  });
+  bot.telegram
+    .setMyCommands([
+      { command: 'meeting', description: 'Start an agent meeting' },
+      { command: 'agents', description: 'List agents in this group' },
+      { command: 'extension', description: 'Manage extensions' },
+    ])
+    .catch((err: unknown) => {
+      logger.warn({ err }, 'Failed to set Telegram bot commands');
+    });
 
   // -------------------------------------------------------------------------
   // Channel interface implementation
@@ -334,7 +348,11 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
       }
     },
 
-    async sendFile(jid: string, filePath: string, caption?: string): Promise<void> {
+    async sendFile(
+      jid: string,
+      filePath: string,
+      caption?: string,
+    ): Promise<void> {
       if (!bot) throw new Error('Bot not initialized');
       if (!isTelegramJid(jid)) {
         throw new Error(`Not a Telegram JID: ${jid}`);
@@ -383,7 +401,10 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
       // Telegram groups are discovered through incoming messages.
       // We don't have an API to list all groups the bot is in,
       // but we can rely on the chat metadata from incoming messages.
-      logger.debug({ force }, 'Telegram group sync (no-op, uses message discovery)');
+      logger.debug(
+        { force },
+        'Telegram group sync (no-op, uses message discovery)',
+      );
     },
   };
 

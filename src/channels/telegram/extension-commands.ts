@@ -1,16 +1,12 @@
-import type { Telegraf } from "telegraf";
-import { listExtensions, addExtension, removeExtension, getExtensionInfo, AVAILABLE_EXTENSIONS } from "../../extension-manager";
-
-interface ExtensionCommandContext {
-  message?: {
-    text?: string;
-    chat?: {
-      id: number;
-    };
-  };
-  reply: (text: string) => Promise<void>;
-  replyWithHTML: (text: string) => Promise<void>;
-}
+import type { Telegraf, Context } from 'telegraf';
+import type { Update } from '@telegraf/types';
+import {
+  listExtensions,
+  addExtension,
+  removeExtension,
+  getExtensionInfo,
+  AVAILABLE_EXTENSIONS,
+} from '../../extension-manager.js';
 
 /**
  * Register extension-related commands on a Telegram bot.
@@ -20,28 +16,34 @@ interface ExtensionCommandContext {
  *   /extension remove <name>     - Uninstall an extension
  *   /extension info <name>       - Show extension details
  */
-export function registerExtensionCommands(bot: Telegraf<ExtensionCommandContext>): void {
-  bot.command("extension", async (ctx) => {
-    const text = ctx.message?.text || "";
-    const parts = text.replace("/extension", "").trim().split(/\s+/);
+export function registerExtensionCommands(
+  bot: Telegraf<Context<Update>>,
+): void {
+  bot.command('extension', async (ctx: Context<Update>) => {
+    const text =
+      'text' in (ctx.message || {})
+        ? (ctx.message as { text?: string }).text || ''
+        : '';
+    const parts = text.replace('/extension', '').trim().split(/\s+/);
     const subcommand = parts[0];
     const name = parts[1];
 
     if (!subcommand) {
-      await ctx.replyWithHTML(
+      await ctx.reply(
         `<b>Extension Commands</b>\n\n` +
-        `/extension list - List available extensions\n` +
-        `/extension add &lt;name&gt; - Install an extension\n` +
-        `/extension remove &lt;name&gt; - Uninstall an extension\n` +
-        `/extension info &lt;name&gt; - Show extension details`
+          `/extension list - List available extensions\n` +
+          `/extension add &lt;name&gt; - Install an extension\n` +
+          `/extension remove &lt;name&gt; - Uninstall an extension\n` +
+          `/extension info &lt;name&gt; - Show extension details`,
+        { parse_mode: 'HTML' },
       );
       return;
     }
 
-    const chatId = String(ctx.message?.chat?.id || "default");
+    const chatId = String(ctx.message?.chat?.id || 'default');
 
     try {
-      if (subcommand === "list") {
+      if (subcommand === 'list') {
         const extensions = listExtensions();
         const groupExtensions = listExtensions(chatId);
 
@@ -58,19 +60,27 @@ export function registerExtensionCommands(bot: Telegraf<ExtensionCommandContext>
           }
         }
 
-        await ctx.replyWithHTML(message);
-      } else if (subcommand === "add" && name) {
+        await ctx.reply(message, { parse_mode: 'HTML' });
+      } else if (subcommand === 'add' && name) {
         if (!AVAILABLE_EXTENSIONS.includes(name)) {
-          await ctx.reply(`Unknown extension: ${name}\nAvailable: ${AVAILABLE_EXTENSIONS.join(", ")}`);
+          await ctx.reply(
+            `Unknown extension: ${name}\nAvailable: ${AVAILABLE_EXTENSIONS.join(', ')}`,
+          );
           return;
         }
 
         addExtension(chatId, name);
-        await ctx.replyWithHTML(`✅ Extension <code>${name}</code> added. Container restarting...`);
-      } else if (subcommand === "remove" && name) {
+        await ctx.reply(
+          `✅ Extension <code>${name}</code> added. Container restarting...`,
+          { parse_mode: 'HTML' },
+        );
+      } else if (subcommand === 'remove' && name) {
         removeExtension(chatId, name);
-        await ctx.replyWithHTML(`🗑 Extension <code>${name}</code> removed. Container restarting...`);
-      } else if (subcommand === "info" && name) {
+        await ctx.reply(
+          `🗑 Extension <code>${name}</code> removed. Container restarting...`,
+          { parse_mode: 'HTML' },
+        );
+      } else if (subcommand === 'info' && name) {
         const info = getExtensionInfo(name);
         if (!info) {
           await ctx.reply(`Unknown extension: ${name}`);
@@ -81,34 +91,36 @@ export function registerExtensionCommands(bot: Telegraf<ExtensionCommandContext>
           `<b>${info.name}</b>\n\n` +
           `${info.description}\n\n` +
           `<b>Tools:</b>\n` +
-          info.tools.map((t) => `• <code>${t}</code>`).join("\n");
+          info.tools.map((t: string) => `• <code>${t}</code>`).join('\n');
 
-        await ctx.replyWithHTML(message);
+        await ctx.reply(message, { parse_mode: 'HTML' });
       } else {
-        await ctx.replyWithHTML(
+        await ctx.reply(
           `Usage:\n` +
-          `/extension list\n` +
-          `/extension add &lt;name&gt;\n` +
-          `/extension remove &lt;name&gt;\n` +
-          `/extension info &lt;name&gt;`
+            `/extension list\n` +
+            `/extension add &lt;name&gt;\n` +
+            `/extension remove &lt;name&gt;\n` +
+            `/extension info &lt;name&gt;`,
+          { parse_mode: 'HTML' },
         );
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       await ctx.reply(`Error: ${errorMessage}`);
     }
   });
 
   // Shortcut commands for quick access
-  bot.command("extensions", async (ctx) => {
+  bot.command('extensions', async (ctx: Context<Update>) => {
     // Alias for /extension list
     const extensions = listExtensions();
     let message = `<b>Available Extensions</b>\n\n`;
     for (const ext of extensions) {
       const info = getExtensionInfo(ext);
-      const desc = info?.description || "";
+      const desc = info?.description || '';
       message += `• <code>${ext}</code> - ${desc}\n`;
     }
-    await ctx.replyWithHTML(message);
+    await ctx.reply(message, { parse_mode: 'HTML' });
   });
 }

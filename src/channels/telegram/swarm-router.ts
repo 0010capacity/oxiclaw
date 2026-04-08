@@ -16,6 +16,7 @@
  */
 
 import { Telegraf } from 'telegraf';
+import type { ParseMode } from '@telegraf/types';
 
 import { logger } from '../../logger.js';
 import {
@@ -165,7 +166,7 @@ export class SwarmRouter {
         await this.bot.telegram.sendMessage(
           chatId,
           `Unknown agent: @agent_${agentName}. Use /agents to list available agents.`,
-          { reply_to_message_id: messageId },
+          { reply_parameters: { message_id: messageId } },
         );
         continue;
       }
@@ -238,7 +239,11 @@ export class SwarmRouter {
   /**
    * Format an agent response with its prefix for Telegram delivery.
    */
-  formatAgentResponse(chatJid: string, agentName: string, content: string): string {
+  formatAgentResponse(
+    chatJid: string,
+    agentName: string,
+    content: string,
+  ): string {
     const prefix = getAgentPrefix(chatJid, agentName);
     // Avoid double-prefixing
     if (content.startsWith(prefix)) return content;
@@ -298,7 +303,7 @@ export class SwarmRouter {
       await this.bot.telegram.sendMessage(
         chatId,
         'No active agents in this group. Register agents first.',
-        { reply_to_message_id: messageId },
+        { reply_parameters: { message_id: messageId } },
       );
       return;
     }
@@ -361,9 +366,9 @@ export class SwarmRouter {
     const chatId = chatJid.replace(/^tg:/, '');
 
     try {
-      const options: { parse_mode?: string; reply_to_message_id?: number } = {};
+      const options: { parse_mode?: ParseMode; reply_parameters?: { message_id: number } } = {};
       if (replyToMessageId) {
-        options.reply_to_message_id = replyToMessageId;
+        options.reply_parameters = { message_id: replyToMessageId };
       }
       await this.bot.telegram.sendMessage(chatId, formatted, options);
     } catch (err) {
