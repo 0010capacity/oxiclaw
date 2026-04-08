@@ -1,6 +1,13 @@
 ---
 name: status
 description: Quick read-only health check — session context, workspace mounts, tool availability, and task snapshot. Use when the user asks for system status or runs /status.
+version: "1.0.0"
+category: operational
+openclaw:
+  format-version: "1.0"
+  compatibility:
+    - nanoclaw
+    - oxiclaw
 ---
 
 # /status — System Status Check
@@ -50,7 +57,7 @@ Confirm which tool families are available to you:
 - **Core:** Bash, Read, Write, Edit, Glob, Grep
 - **Web:** WebSearch, WebFetch
 - **Orchestration:** Task, TaskOutput, TaskStop, TeamCreate, TeamDelete, SendMessage
-- **MCP:** mcp__nanoclaw__* (send_message, schedule_task, list_tasks, pause_task, resume_task, cancel_task, update_task, register_group)
+- **MCP:** mcp__oxiclaw__* (send_message, schedule_task, list_tasks, pause_task, resume_task, cancel_task, update_task, register_group)
 
 ### 4. Container utilities
 
@@ -65,7 +72,7 @@ claude --version 2>/dev/null
 Use the MCP tool to list tasks:
 
 ```
-Call mcp__nanoclaw__list_tasks to get scheduled tasks.
+Call mcp__oxiclaw__list_tasks to get scheduled tasks.
 ```
 
 If no tasks exist, report "No scheduled tasks."

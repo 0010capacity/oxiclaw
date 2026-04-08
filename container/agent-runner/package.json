@@ -1,17 +1,18 @@
 {
-  "name": "nanoclaw-agent-runner",
+  "name": "oxiclaw-agent-runner",
   "version": "1.0.0",
   "type": "module",
-  "description": "Container-side agent runner for NanoClaw",
+  "description": "Container-side agent runner for OxiClaw (pi-mono SDK)",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.92",
+    "@mariozechner/pi-coding-agent": "git+ssh://git@github.com:badlogic/pi-mono",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "cron-parser": "^5.0.0",
+    "pi-monorepo": "github:badlogic/pi-mono#main",
     "zod": "^4.0.0"
   },
   "devDependencies": {

@@ -1,6 +1,13 @@
 ---
 name: capabilities
 description: Show what this NanoClaw instance can do — installed skills, available tools, and system info. Read-only. Use when the user asks what the bot can do, what's installed, or runs /capabilities.
+version: "1.0.0"
+category: operational
+openclaw:
+  format-version: "1.0"
+  compatibility:
+    - nanoclaw
+    - oxiclaw
 ---
 
 # /capabilities — System Capabilities Report
@@ -39,11 +46,11 @@ Read the allowed tools from your SDK configuration. You always have access to:
 - **Web:** WebSearch, WebFetch
 - **Orchestration:** Task, TaskOutput, TaskStop, TeamCreate, TeamDelete, SendMessage
 - **Other:** TodoWrite, ToolSearch, Skill, NotebookEdit
-- **MCP:** mcp__nanoclaw__* (messaging, tasks, group management)
+- **MCP:** mcp__oxiclaw__* (messaging, tasks, group management)
 
 ### 3. MCP server tools
 
-The NanoClaw MCP server exposes these tools (via `mcp__nanoclaw__*` prefix):
+The OxiClaw MCP server exposes these tools (via `mcp__oxiclaw__*` prefix):
 - `send_message` — send a message to the user/group
 - `schedule_task` — schedule a recurring or one-time task
 - `list_tasks` — list scheduled tasks

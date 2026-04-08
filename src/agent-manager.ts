@@ -139,10 +139,7 @@ export function registerAgent(
   group.agents.set(agentName, agentInfo);
   agentStatusMap.set(`${chatId}:${agentName}`, 'idle');
 
-  logger.info(
-    { chatId, agentName, role: persona?.role },
-    'Agent registered',
-  );
+  logger.info({ chatId, agentName, role: persona?.role }, 'Agent registered');
 
   return agentInfo;
 }
@@ -253,10 +250,7 @@ export function touchAgent(chatId: string, agentName: string): void {
 /**
  * Batch-update statuses for all agents in a group (e.g. when a container stops).
  */
-export function setAllAgentStatuses(
-  chatId: string,
-  status: AgentStatus,
-): void {
+export function setAllAgentStatuses(chatId: string, status: AgentStatus): void {
   const group = groups.get(chatId);
   if (!group) return;
 
@@ -273,10 +267,7 @@ export function setAllAgentStatuses(
 /**
  * Record that a container is now running for a group.
  */
-export function setContainerRunning(
-  chatId: string,
-  containerId: string,
-): void {
+export function setContainerRunning(chatId: string, containerId: string): void {
   let group = groups.get(chatId);
   if (!group) {
     group = {
@@ -364,9 +355,7 @@ export function discoverAgents(): void {
       // Only register if not already tracked (avoid overwriting runtime state)
       if (group.agents.has(agentName)) continue;
 
-      const workDir = path.join(
-        GROUPS_DIR, chatId, 'agents', agentName,
-      );
+      const workDir = path.join(GROUPS_DIR, chatId, 'agents', agentName);
       const persona = loadPersona(chatId, agentName);
 
       const agentInfo: AgentInfo = {

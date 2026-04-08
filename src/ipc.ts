@@ -12,6 +12,7 @@ import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendFile?: (jid: string, filePath: string, caption?: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -173,6 +174,9 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For send_file
+    filePath?: string;
+    caption?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -459,6 +463,34 @@ export async function processTaskIpc(
           { data },
           'Invalid register_group request - missing required fields',
         );
+      }
+      break;
+
+    case 'send_file':
+      if (data.targetJid && data.filePath && deps.sendFile) {
+        // Authorization: main can send to any group, non-main only to itself
+        const targetGroup = registeredGroups[data.targetJid];
+        if (!isMain && (!targetGroup || targetGroup.folder !== sourceGroup)) {
+          logger.warn(
+            { targetJid: data.targetJid, sourceGroup },
+            'Unauthorized send_file attempt blocked',
+          );
+          break;
+        }
+        try {
+          await deps.sendFile(data.targetJid, data.filePath, data.caption);
+          logger.info(
+            { targetJid: data.targetJid, filePath: data.filePath },
+            'File send via IPC',
+          );
+        } catch (err) {
+          logger.error(
+            { targetJid: data.targetJid, filePath: data.filePath, err },
+            'send_file failed',
+          );
+        }
+      } else {
+        logger.warn({ data }, 'Invalid or missing send_file params');
       }
       break;
 

@@ -90,8 +90,7 @@ export class HealthChecker {
   private running = false;
 
   constructor(config: HealthCheckConfig = {}) {
-    this.checkIntervalMs =
-      config.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
+    this.checkIntervalMs = config.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
     this.unhealthyTimeoutMs =
       config.unhealthyTimeoutMs ?? DEFAULT_UNHEALTHY_TIMEOUT_MS;
     this.maxFailures = config.maxFailures ?? DEFAULT_MAX_FAILURES;
@@ -177,7 +176,11 @@ export class HealthChecker {
       const activeMeeting = meetingManager.getActiveMeeting(session.group_id);
       if (activeMeeting) {
         logger.debug(
-          { sessionId: session.id, groupId: session.group_id, meetingId: activeMeeting.id },
+          {
+            sessionId: session.id,
+            groupId: session.group_id,
+            meetingId: activeMeeting.id,
+          },
           '[health-checker] Session has active meeting — skipping health check',
         );
         return {
@@ -191,7 +194,9 @@ export class HealthChecker {
     }
 
     try {
-      const response = await this.performHealthCheck(session.container_id ?? '');
+      const response = await this.performHealthCheck(
+        session.container_id ?? '',
+      );
 
       if (response.ok) {
         // Reset failure count on success
@@ -306,10 +311,7 @@ export class HealthChecker {
     const os = await import('os');
 
     const tmpDir = fs.realpathSync(os.tmpdir());
-    const requestFile = path.join(
-      tmpDir,
-      `oxiclaw-health-${containerId}.json`,
-    );
+    const requestFile = path.join(tmpDir, `oxiclaw-health-${containerId}.json`);
     const responseFile = path.join(
       tmpDir,
       `oxiclaw-health-${containerId}-resp.json`,
@@ -404,9 +406,7 @@ let instance: HealthChecker | null = null;
  * Start the global health checker instance.
  * Safe to call multiple times — returns existing instance if already started.
  */
-export function startHealthChecker(
-  config?: HealthCheckConfig,
-): HealthChecker {
+export function startHealthChecker(config?: HealthCheckConfig): HealthChecker {
   if (instance) {
     return instance;
   }

@@ -122,7 +122,7 @@ allowedTools: [
   'Bash',
   'Read', 'Write', 'Edit', 'Glob', 'Grep',
   'WebSearch', 'WebFetch',
-  'mcp__nanoclaw__*',
+  'mcp__oxiclaw__*',
   'mcp__parallel-search__*',
   'mcp__parallel-task__*'
 ],

@@ -1,6 +1,15 @@
 ---
 name: agent-browser
 description: Browse the web for any task — research topics, read articles, interact with web apps, fill forms, take screenshots, extract data, and test web pages. Use whenever a browser would be useful, not just when the user explicitly asks.
+version: "1.0.0"
+category: container-tool
+openclaw:
+  format-version: "1.0"
+  compatibility:
+    - nanoclaw
+    - oxiclaw
+cli-dependencies:
+  - agent-browser
 allowed-tools: Bash(agent-browser:*)
 ---
 

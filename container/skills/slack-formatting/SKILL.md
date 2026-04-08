@@ -1,6 +1,13 @@
 ---
 name: slack-formatting
 description: Format messages for Slack using mrkdwn syntax. Use when responding to Slack channels (folder starts with "slack_" or JID contains slack identifiers).
+version: "1.0.0"
+category: formatter
+openclaw:
+  format-version: "1.0"
+  compatibility:
+    - nanoclaw
+    - oxiclaw
 ---
 
 # Slack Message Formatting (mrkdwn)

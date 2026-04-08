@@ -69,9 +69,7 @@ import {
   setContainerStopped,
   touchAgent,
 } from './agent-manager.js';
-import {
-  loadSystemPrompt,
-} from './persona-loader.js';
+import { loadSystemPrompt } from './persona-loader.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -737,7 +735,22 @@ async function main(): Promise<void> {
     },
   });
   startSessionCleanup();
-  startHealthChecker();
+  startHealthChecker({
+    onRestartNeeded: async (session) => {
+      logger.warn(
+        {
+          sessionId: session.id,
+          groupId: session.group_id,
+          containerId: session.container_id,
+        },
+        '[health-checker] Container restart needed but not fully implemented — session marked as error',
+      );
+      // TODO: Implement proper container restart by:
+      // 1. Storing session metadata (prompt, sessionId) when creating sessions
+      // 2. Looking up the last prompt from session metadata here
+      // 3. Calling runContainerAgent with the stored prompt to restart
+    },
+  });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
 
@@ -756,7 +769,10 @@ async function main(): Promise<void> {
 
       const group = registeredGroups[msg.chatJid];
       if (!group) {
-        logger.warn({ chatJid: msg.chatJid }, 'Swarm route: group not registered');
+        logger.warn(
+          { chatJid: msg.chatJid },
+          'Swarm route: group not registered',
+        );
         return;
       }
 
@@ -800,10 +816,9 @@ async function main(): Promise<void> {
             async (output) => {
               // Streaming output callback — deliver each result to Telegram as it arrives
               if (output.result) {
-                const text = output.result.replace(
-                  /<internal>[\s\S]*?<\/internal>/g,
-                  '',
-                ).trim();
+                const text = output.result
+                  .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+                  .trim();
                 if (text) {
                   await swarmRouter!.deliverResponse(
                     msg.chatJid,
@@ -831,35 +846,45 @@ async function main(): Promise<void> {
                 );
               }
             },
-          ).then(async (output) => {
-            // Final cleanup after container exits
-            setAgentStatus(msg.chatJid, agentName, 'idle');
-            setContainerStopped(msg.chatJid);
+          )
+            .then(async (output) => {
+              // Final cleanup after container exits
+              // Note: setContainerStopped is NOT called here — swarm containers are
+              // ephemeral and not managed by the group queue. Calling it would mark
+              // ALL agents in the group as stopped, corrupting status in mention-all
+              // scenarios where other agents are still running.
+              setAgentStatus(msg.chatJid, agentName, 'idle');
 
-            // If there was a final result not already sent via streaming (result is null on success after streaming)
-            if (output.status === 'error') {
+              // If there was a final result not already sent via streaming (result is null on success after streaming)
+              if (output.status === 'error') {
+                logger.error(
+                  { agentName, chatJid: msg.chatJid, error: output.error },
+                  'Swarm agent container error',
+                );
+              }
+            })
+            .catch((err) => {
+              // Handle promise rejection (container spawn failure, etc.)
+              setAgentStatus(msg.chatJid, agentName, 'error');
+              // Note: setContainerStopped not called — see comment in .then() block above
               logger.error(
-                { agentName, chatJid: msg.chatJid, error: output.error },
-                'Swarm agent container error',
+                { agentName, chatJid: msg.chatJid, err },
+                'Swarm agent container spawn error',
               );
-            }
-          }).catch((err) => {
-            // Handle promise rejection (container spawn failure, etc.)
-            setAgentStatus(msg.chatJid, agentName, 'error');
-            setContainerStopped(msg.chatJid);
-            logger.error(
-              { agentName, chatJid: msg.chatJid, err },
-              'Swarm agent container spawn error',
-            );
-            swarmRouter!.deliverResponse(
-              msg.chatJid,
-              agentName,
-              `Error: ${err instanceof Error ? err.message : String(err)}`,
-              msg.messageId,
-            ).catch((e) =>
-              logger.error({ err: e }, 'Failed to deliver error to Telegram')
-            );
-          });
+              swarmRouter!
+                .deliverResponse(
+                  msg.chatJid,
+                  agentName,
+                  `Error: ${err instanceof Error ? err.message : String(err)}`,
+                  msg.messageId,
+                )
+                .catch((e) =>
+                  logger.error(
+                    { err: e },
+                    'Failed to deliver error to Telegram',
+                  ),
+                );
+            });
         }),
       );
 

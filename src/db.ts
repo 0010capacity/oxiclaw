@@ -82,6 +82,52 @@ function createSchema(database: Database.Database): void {
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
     );
+
+    CREATE TABLE IF NOT EXISTS agent_sessions (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL,
+      container_id TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      started_at TEXT NOT NULL,
+      last_health_check TEXT,
+      metadata TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_sessions_group ON agent_sessions(group_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_sessions_status ON agent_sessions(status);
+
+    CREATE TABLE IF NOT EXISTS meetings (
+      id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      agenda TEXT NOT NULL,
+      moderator TEXT NOT NULL,
+      participants TEXT NOT NULL,
+      turns INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'active',
+      started_at TEXT NOT NULL,
+      ended_at TEXT,
+      summary TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_meetings_chat ON meetings(chat_id);
+    CREATE INDEX IF NOT EXISTS idx_meetings_status ON meetings(status);
+
+    CREATE TABLE IF NOT EXISTS proactive_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id TEXT NOT NULL,
+      topic TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_proactive_chat ON proactive_messages(chat_id);
+
+    CREATE TABLE IF NOT EXISTS meeting_turns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      meeting_id TEXT NOT NULL,
+      agent TEXT NOT NULL,
+      content TEXT NOT NULL,
+      timestamp TEXT NOT NULL,
+      FOREIGN KEY (meeting_id) REFERENCES meetings(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_meeting_turns_meeting ON meeting_turns(meeting_id);
   `);
 
   // Add context_mode column if it doesn't exist (migration for existing DBs)
@@ -156,6 +202,36 @@ function createSchema(database: Database.Database): void {
     database.exec(`ALTER TABLE messages ADD COLUMN reply_to_sender_name TEXT`);
   } catch {
     /* columns already exist */
+  }
+
+  // Ensure agent_sessions table exists (migration for existing DBs that
+  // were created before this table was added). The CREATE TABLE IF NOT
+  // EXISTS in createSchema handles new DBs; this handles the case where
+  // an existing DB is opened and the table might be missing.
+  try {
+    const tableExists = database
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='agent_sessions'`,
+      )
+      .get();
+    if (!tableExists) {
+      database.exec(`
+        CREATE TABLE agent_sessions (
+          id TEXT PRIMARY KEY,
+          group_id TEXT NOT NULL,
+          container_id TEXT,
+          status TEXT NOT NULL DEFAULT 'active',
+          started_at TEXT NOT NULL,
+          last_health_check TEXT,
+          metadata TEXT
+        );
+        CREATE INDEX idx_agent_sessions_group ON agent_sessions(group_id);
+        CREATE INDEX idx_agent_sessions_status ON agent_sessions(status);
+      `);
+      logger.info('Created agent_sessions table (migration)');
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Failed to check/create agent_sessions table');
   }
 }
 
@@ -581,6 +657,154 @@ export function deleteSession(groupFolder: string): void {
   db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(groupFolder);
 }
 
+// --- Agent session accessors ---
+
+export interface AgentSession {
+  id: string;
+  group_id: string;
+  container_id: string | null;
+  status: string;
+  started_at: string;
+  last_health_check: string | null;
+  metadata: string | null;
+}
+
+export interface Meeting {
+  id: string;
+  chat_id: string;
+  agenda: string;
+  moderator: string;
+  participants: string;
+  turns: number;
+  status: string;
+  started_at: string;
+  ended_at: string | null;
+  summary: string | null;
+}
+
+export interface ProactiveMessage {
+  id: number;
+  chat_id: string;
+  topic: string;
+  content: string;
+  created_at: string;
+}
+
+export interface MeetingTurn {
+  id: number;
+  meeting_id: string;
+  agent: string;
+  content: string;
+  timestamp: string;
+}
+
+/**
+ * Create a new agent session record.
+ * Returns the session ID.
+ */
+export function createAgentSession(session: {
+  id: string;
+  group_id: string;
+  container_id?: string;
+  status?: string;
+  metadata?: Record<string, unknown>;
+}): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO agent_sessions (id, group_id, container_id, status, started_at, last_health_check, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    session.id,
+    session.group_id,
+    session.container_id ?? null,
+    session.status ?? 'active',
+    now,
+    null,
+    session.metadata ? JSON.stringify(session.metadata) : null,
+  );
+}
+
+/**
+ * Update an existing agent session.
+ * Only the provided fields are updated.
+ */
+export function updateAgentSession(
+  id: string,
+  updates: {
+    container_id?: string;
+    status?: string;
+    last_health_check?: string;
+    metadata?: Record<string, unknown>;
+  },
+): void {
+  const fields: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.container_id !== undefined) {
+    fields.push('container_id = ?');
+    values.push(updates.container_id);
+  }
+  if (updates.status !== undefined) {
+    fields.push('status = ?');
+    values.push(updates.status);
+  }
+  if (updates.last_health_check !== undefined) {
+    fields.push('last_health_check = ?');
+    values.push(updates.last_health_check);
+  }
+  if (updates.metadata !== undefined) {
+    fields.push('metadata = ?');
+    values.push(JSON.stringify(updates.metadata));
+  }
+
+  if (fields.length === 0) return;
+
+  values.push(id);
+  db.prepare(`UPDATE agent_sessions SET ${fields.join(', ')} WHERE id = ?`).run(
+    ...values,
+  );
+}
+
+/**
+ * Get all active agent sessions (status = 'active').
+ * Used by HealthChecker to determine which containers to monitor.
+ */
+export function getActiveSessions(): AgentSession[] {
+  return db
+    .prepare(
+      `SELECT id, group_id, container_id, status, started_at, last_health_check, metadata
+       FROM agent_sessions
+       WHERE status = 'active'
+       ORDER BY started_at DESC`,
+    )
+    .all() as AgentSession[];
+}
+
+/**
+ * End an agent session by setting status to 'ended'.
+ * Records the end time in metadata.
+ */
+export function endAgentSession(id: string): void {
+  // Read existing metadata to preserve it
+  const row = db
+    .prepare('SELECT metadata FROM agent_sessions WHERE id = ?')
+    .get(id) as { metadata: string | null } | undefined;
+
+  let metadata: Record<string, unknown> = {};
+  if (row?.metadata) {
+    try {
+      metadata = JSON.parse(row.metadata);
+    } catch {
+      // corrupted metadata, start fresh
+    }
+  }
+  metadata.ended_at = new Date().toISOString();
+
+  db.prepare(
+    `UPDATE agent_sessions SET status = 'ended', metadata = ? WHERE id = ?`,
+  ).run(JSON.stringify(metadata), id);
+}
+
 export function getAllSessions(): Record<string, string> {
   const rows = db
     .prepare('SELECT group_folder, session_id FROM sessions')
@@ -590,6 +814,157 @@ export function getAllSessions(): Record<string, string> {
     result[row.group_folder] = row.session_id;
   }
   return result;
+}
+
+// --- Meeting accessors ---
+
+/**
+ * Create a new meeting record.
+ */
+export function createMeeting(meeting: {
+  id: string;
+  chat_id: string;
+  agenda: string;
+  moderator: string;
+  participants: string[];
+}): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO meetings (id, chat_id, agenda, moderator, participants, turns, status, started_at)
+     VALUES (?, ?, ?, ?, ?, 0, 'active', ?)`,
+  ).run(
+    meeting.id,
+    meeting.chat_id,
+    meeting.agenda,
+    meeting.moderator,
+    JSON.stringify(meeting.participants),
+    now,
+  );
+}
+
+/**
+ * Update an existing meeting.
+ */
+export function updateMeeting(
+  id: string,
+  updates: {
+    turns?: number;
+    status?: string;
+    ended_at?: string;
+    summary?: string;
+  },
+): void {
+  const fields: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.turns !== undefined) {
+    fields.push('turns = ?');
+    values.push(updates.turns);
+  }
+  if (updates.status !== undefined) {
+    fields.push('status = ?');
+    values.push(updates.status);
+  }
+  if (updates.ended_at !== undefined) {
+    fields.push('ended_at = ?');
+    values.push(updates.ended_at);
+  }
+  if (updates.summary !== undefined) {
+    fields.push('summary = ?');
+    values.push(updates.summary);
+  }
+
+  if (fields.length === 0) return;
+
+  values.push(id);
+  db.prepare(`UPDATE meetings SET ${fields.join(', ')} WHERE id = ?`).run(
+    ...values,
+  );
+}
+
+/**
+ * Get all active meetings (status = 'active').
+ */
+export function getActiveMeetings(): Meeting[] {
+  return db
+    .prepare(
+      `SELECT * FROM meetings WHERE status = 'active' ORDER BY started_at DESC`,
+    )
+    .all() as Meeting[];
+}
+
+/**
+ * End an active meeting.
+ */
+export function endMeeting(id: string, summary?: string): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE meetings SET status = 'completed', ended_at = ?, summary = ? WHERE id = ?`,
+  ).run(now, summary ?? null, id);
+}
+
+// --- Proactive message accessors ---
+
+/**
+ * Create a new proactive message record.
+ */
+export function createProactiveMessage(msg: {
+  chat_id: string;
+  topic: string;
+  content: string;
+}): number {
+  const now = new Date().toISOString();
+  const result = db
+    .prepare(
+      `INSERT INTO proactive_messages (chat_id, topic, content, created_at)
+     VALUES (?, ?, ?, ?)`,
+    )
+    .run(msg.chat_id, msg.topic, msg.content, now);
+  return result.lastInsertRowid as number;
+}
+
+/**
+ * Get all proactive messages for a specific group (chat).
+ */
+export function getProactiveMessagesForGroup(
+  chatId: string,
+): ProactiveMessage[] {
+  return db
+    .prepare(
+      `SELECT * FROM proactive_messages WHERE chat_id = ? ORDER BY created_at DESC`,
+    )
+    .all(chatId) as ProactiveMessage[];
+}
+
+// --- Meeting turn accessors ---
+
+/**
+ * Create a new meeting turn record.
+ */
+export function createMeetingTurn(turn: {
+  meeting_id: string;
+  agent: string;
+  content: string;
+}): number {
+  const now = new Date().toISOString();
+  const result = db
+    .prepare(
+      `INSERT INTO meeting_turns (meeting_id, agent, content, timestamp)
+     VALUES (?, ?, ?, ?)`,
+    )
+    .run(turn.meeting_id, turn.agent, turn.content, now);
+  return result.lastInsertRowid as number;
+}
+
+/**
+ * Get all turns for a specific meeting.
+ */
+export function getMeetingTurns(meetingId: string): MeetingTurn[] {
+  return db
+    .prepare(
+      `SELECT * FROM meeting_turns WHERE meeting_id = ? ORDER BY timestamp ASC`,
+    )
+    .all(meetingId) as MeetingTurn[];
 }
 
 // --- Registered group accessors ---

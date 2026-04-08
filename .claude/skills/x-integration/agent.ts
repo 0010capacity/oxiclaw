@@ -5,12 +5,12 @@
  * The host-side implementation is in host.ts.
  *
  * Note: This file is compiled in the container, not on the host.
- * The @ts-ignore is needed because the SDK is only available in the container.
+ * Uses pi-mono's defineTool + TypeBox for schema definition.
  */
 
 // @ts-ignore - SDK available in container environment only
-import { tool } from '@anthropic-ai/claude-agent-sdk';
-import { z } from 'zod';
+import { defineTool } from '@mariozechner/pi-coding-agent';
+import { Type } from '@sinclair/typebox';
 import fs from 'fs';
 import path from 'path';
 
@@ -62,182 +62,171 @@ export interface SkillToolsContext {
 export function createXTools(ctx: SkillToolsContext) {
   const { groupFolder, isMain } = ctx;
 
-  return [
-    tool(
-      'x_post',
-      `Post a tweet to X (Twitter). Main group only.
-
-The host machine will execute the browser automation to post the tweet.
-Make sure the content is appropriate and within X's character limit (280 chars for text).`,
-      {
-        content: z.string().max(280).describe('The tweet content to post (max 280 characters)')
-      },
-      async (args: { content: string }) => {
-        if (!isMain) {
-          return {
-            content: [{ type: 'text', text: 'Only the main group can post tweets.' }],
-            isError: true
-          };
-        }
-
-        if (args.content.length > 280) {
-          return {
-            content: [{ type: 'text', text: `Tweet exceeds 280 character limit (current: ${args.content.length})` }],
-            isError: true
-          };
-        }
-
-        const requestId = `xpost-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        writeIpcFile(TASKS_DIR, {
-          type: 'x_post',
-          requestId,
-          content: args.content,
-          groupFolder,
-          timestamp: new Date().toISOString()
-        });
-
-        const result = await waitForResult(requestId);
+  const xPostTool = defineTool({
+    name: 'x_post',
+    description: 'Post a tweet to X (Twitter). Main group only.\n\nThe host machine will execute the browser automation to post the tweet.\nMake sure the content is appropriate and within X\'s character limit (280 chars for text).',
+    parameters: Type.Object({
+      content: Type.String({ description: 'The tweet content to post (max 280 characters)' }),
+    }),
+    execute: async (args) => {
+      if (!isMain) {
         return {
-          content: [{ type: 'text', text: result.message }],
-          isError: !result.success
+          content: [{ type: 'text', text: 'Only the main group can post tweets.' }],
+          isError: true
         };
       }
-    ),
 
-    tool(
-      'x_like',
-      `Like a tweet on X (Twitter). Main group only.
-
-Provide the tweet URL or tweet ID to like.`,
-      {
-        tweet_url: z.string().describe('The tweet URL (e.g., https://x.com/user/status/123) or tweet ID')
-      },
-      async (args: { tweet_url: string }) => {
-        if (!isMain) {
-          return {
-            content: [{ type: 'text', text: 'Only the main group can interact with X.' }],
-            isError: true
-          };
-        }
-
-        const requestId = `xlike-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        writeIpcFile(TASKS_DIR, {
-          type: 'x_like',
-          requestId,
-          tweetUrl: args.tweet_url,
-          groupFolder,
-          timestamp: new Date().toISOString()
-        });
-
-        const result = await waitForResult(requestId);
+      if (args.content.length > 280) {
         return {
-          content: [{ type: 'text', text: result.message }],
-          isError: !result.success
+          content: [{ type: 'text', text: `Tweet exceeds 280 character limit (current: ${args.content.length})` }],
+          isError: true
         };
       }
-    ),
 
-    tool(
-      'x_reply',
-      `Reply to a tweet on X (Twitter). Main group only.
+      const requestId = `xpost-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, {
+        type: 'x_post',
+        requestId,
+        content: args.content,
+        groupFolder,
+        timestamp: new Date().toISOString()
+      });
 
-Provide the tweet URL and your reply content.`,
-      {
-        tweet_url: z.string().describe('The tweet URL (e.g., https://x.com/user/status/123) or tweet ID'),
-        content: z.string().max(280).describe('The reply content (max 280 characters)')
-      },
-      async (args: { tweet_url: string; content: string }) => {
-        if (!isMain) {
-          return {
-            content: [{ type: 'text', text: 'Only the main group can interact with X.' }],
-            isError: true
-          };
-        }
+      const result = await waitForResult(requestId);
+      return {
+        content: [{ type: 'text', text: result.message }],
+        isError: !result.success
+      };
+    }
+  });
 
-        const requestId = `xreply-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        writeIpcFile(TASKS_DIR, {
-          type: 'x_reply',
-          requestId,
-          tweetUrl: args.tweet_url,
-          content: args.content,
-          groupFolder,
-          timestamp: new Date().toISOString()
-        });
-
-        const result = await waitForResult(requestId);
+  const xLikeTool = defineTool({
+    name: 'x_like',
+    description: 'Like a tweet on X (Twitter). Main group only.\n\nProvide the tweet URL or tweet ID to like.',
+    parameters: Type.Object({
+      tweet_url: Type.String({ description: 'The tweet URL (e.g., https://x.com/user/status/123) or tweet ID' }),
+    }),
+    execute: async (args) => {
+      if (!isMain) {
         return {
-          content: [{ type: 'text', text: result.message }],
-          isError: !result.success
+          content: [{ type: 'text', text: 'Only the main group can interact with X.' }],
+          isError: true
         };
       }
-    ),
 
-    tool(
-      'x_retweet',
-      `Retweet a tweet on X (Twitter). Main group only.
+      const requestId = `xlike-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, {
+        type: 'x_like',
+        requestId,
+        tweetUrl: args.tweet_url,
+        groupFolder,
+        timestamp: new Date().toISOString()
+      });
 
-Provide the tweet URL to retweet.`,
-      {
-        tweet_url: z.string().describe('The tweet URL (e.g., https://x.com/user/status/123) or tweet ID')
-      },
-      async (args: { tweet_url: string }) => {
-        if (!isMain) {
-          return {
-            content: [{ type: 'text', text: 'Only the main group can interact with X.' }],
-            isError: true
-          };
-        }
+      const result = await waitForResult(requestId);
+      return {
+        content: [{ type: 'text', text: result.message }],
+        isError: !result.success
+      };
+    }
+  });
 
-        const requestId = `xretweet-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        writeIpcFile(TASKS_DIR, {
-          type: 'x_retweet',
-          requestId,
-          tweetUrl: args.tweet_url,
-          groupFolder,
-          timestamp: new Date().toISOString()
-        });
-
-        const result = await waitForResult(requestId);
+  const xReplyTool = defineTool({
+    name: 'x_reply',
+    description: 'Reply to a tweet on X (Twitter). Main group only.\n\nProvide the tweet URL and your reply content.',
+    parameters: Type.Object({
+      tweet_url: Type.String({ description: 'The tweet URL (e.g., https://x.com/user/status/123) or tweet ID' }),
+      content: Type.String({ description: 'The reply content (max 280 characters)' }),
+    }),
+    execute: async (args) => {
+      if (!isMain) {
         return {
-          content: [{ type: 'text', text: result.message }],
-          isError: !result.success
+          content: [{ type: 'text', text: 'Only the main group can interact with X.' }],
+          isError: true
         };
       }
-    ),
 
-    tool(
-      'x_quote',
-      `Quote tweet on X (Twitter). Main group only.
+      const requestId = `xreply-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, {
+        type: 'x_reply',
+        requestId,
+        tweetUrl: args.tweet_url,
+        content: args.content,
+        groupFolder,
+        timestamp: new Date().toISOString()
+      });
 
-Retweet with your own comment added.`,
-      {
-        tweet_url: z.string().describe('The tweet URL (e.g., https://x.com/user/status/123) or tweet ID'),
-        comment: z.string().max(280).describe('Your comment for the quote tweet (max 280 characters)')
-      },
-      async (args: { tweet_url: string; comment: string }) => {
-        if (!isMain) {
-          return {
-            content: [{ type: 'text', text: 'Only the main group can interact with X.' }],
-            isError: true
-          };
-        }
+      const result = await waitForResult(requestId);
+      return {
+        content: [{ type: 'text', text: result.message }],
+        isError: !result.success
+      };
+    }
+  });
 
-        const requestId = `xquote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        writeIpcFile(TASKS_DIR, {
-          type: 'x_quote',
-          requestId,
-          tweetUrl: args.tweet_url,
-          comment: args.comment,
-          groupFolder,
-          timestamp: new Date().toISOString()
-        });
-
-        const result = await waitForResult(requestId);
+  const xRetweetTool = defineTool({
+    name: 'x_retweet',
+    description: 'Retweet a tweet on X (Twitter). Main group only.\n\nProvide the tweet URL to retweet.',
+    parameters: Type.Object({
+      tweet_url: Type.String({ description: 'The tweet URL (e.g., https://x.com/user/status/123) or tweet ID' }),
+    }),
+    execute: async (args) => {
+      if (!isMain) {
         return {
-          content: [{ type: 'text', text: result.message }],
-          isError: !result.success
+          content: [{ type: 'text', text: 'Only the main group can interact with X.' }],
+          isError: true
         };
       }
-    )
-  ];
+
+      const requestId = `xretweet-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, {
+        type: 'x_retweet',
+        requestId,
+        tweetUrl: args.tweet_url,
+        groupFolder,
+        timestamp: new Date().toISOString()
+      });
+
+      const result = await waitForResult(requestId);
+      return {
+        content: [{ type: 'text', text: result.message }],
+        isError: !result.success
+      };
+    }
+  });
+
+  const xQuoteTool = defineTool({
+    name: 'x_quote',
+    description: 'Quote tweet on X (Twitter). Main group only.\n\nRetweet with your own comment added.',
+    parameters: Type.Object({
+      tweet_url: Type.String({ description: 'The tweet URL (e.g., https://x.com/user/status/123) or tweet ID' }),
+      comment: Type.String({ description: 'Your comment for the quote tweet (max 280 characters)' }),
+    }),
+    execute: async (args) => {
+      if (!isMain) {
+        return {
+          content: [{ type: 'text', text: 'Only the main group can interact with X.' }],
+          isError: true
+        };
+      }
+
+      const requestId = `xquote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, {
+        type: 'x_quote',
+        requestId,
+        tweetUrl: args.tweet_url,
+        comment: args.comment,
+        groupFolder,
+        timestamp: new Date().toISOString()
+      });
+
+      const result = await waitForResult(requestId);
+      return {
+        content: [{ type: 'text', text: result.message }],
+        isError: !result.success
+      };
+    }
+  });
+
+  return [xPostTool, xLikeTool, xReplyTool, xRetweetTool, xQuoteTool];
 }

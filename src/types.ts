@@ -6,7 +6,7 @@ export interface AdditionalMount {
 
 /**
  * Mount Allowlist - Security configuration for additional mounts
- * This file should be stored at ~/.config/nanoclaw/mount-allowlist.json
+ * This file should be stored at ~/.config/oxiclaw/mount-allowlist.json
  * and is NOT mounted into any container, making it tamper-proof from agents.
  */
 export interface MountAllowlist {
@@ -55,6 +55,7 @@ export interface NewMessage {
   reply_to_message_id?: string;
   reply_to_message_content?: string;
   reply_to_sender_name?: string;
+  image_base64?: string; // base64-encoded image for multimodal input
 }
 
 export interface ScheduledTask {
@@ -95,6 +96,8 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
+  // Optional: send a file (image) to a chat.
+  sendFile?(jid: string, filePath: string, caption?: string): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

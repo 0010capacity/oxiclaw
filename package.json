@@ -1,5 +1,5 @@
 {
-  "name": "nanoclaw",
+  "name": "oxiclaw",
   "version": "1.2.52",
   "description": "Personal Claude assistant. Lightweight, secure, customizable.",
   "type": "module",
@@ -23,7 +23,9 @@
   "dependencies": {
     "@onecli-sh/sdk": "^0.2.0",
     "better-sqlite3": "11.10.0",
-    "cron-parser": "5.5.0"
+    "cron-parser": "5.5.0",
+    "proper-lockfile": "^4.1.2",
+    "telegraf": "^4.16.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
