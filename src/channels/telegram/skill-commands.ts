@@ -9,7 +9,7 @@ import {
 } from '../../skill-manager.js';
 import { DATA_DIR } from '../../config.js';
 import { logger } from '../../logger.js';
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
+import { mkdirSync, writeFileSync } from 'fs';
 import path from 'path';
 
 /**
@@ -109,9 +109,15 @@ export function registerSkillCommands(
           try {
             mkdirSync(sessionsDir, { recursive: true });
             writeFileSync(path.join(sessionsDir, '.restart-skill'), '');
-            logger.info({ groupFolder }, 'Restart sentinel written for skill install');
+            logger.info(
+              { groupFolder },
+              'Restart sentinel written for skill install',
+            );
           } catch (err) {
-            logger.warn({ err, groupFolder }, 'Failed to write restart sentinel');
+            logger.warn(
+              { err, groupFolder },
+              'Failed to write restart sentinel',
+            );
           }
           await ctx.reply(
             `✅ Skill <b>${result.skillName || name}</b> installed.\n<i>Container restarting to apply...</i>`,
@@ -138,7 +144,9 @@ export function registerSkillCommands(
           try {
             mkdirSync(sessionsDir, { recursive: true });
             writeFileSync(path.join(sessionsDir, '.restart-skill'), '');
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
           await ctx.reply(
             `🗑 Skill <b>${name}</b> removed.\n<i>Container restarting to apply...</i>`,
             { parse_mode: 'HTML' },

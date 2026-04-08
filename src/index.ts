@@ -28,6 +28,7 @@ import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
 } from './container-runtime.js';
+import { addExtension, listExtensions } from './extension-manager.js';
 import {
   getAllChats,
   getAllRegisteredGroups,
@@ -74,7 +75,6 @@ import {
   getActiveAgents,
   setAgentStatus,
   setContainerRunning,
-  setContainerStopped,
   touchAgent,
 } from './agent-manager.js';
 import { loadSystemPrompt } from './persona-loader.js';
@@ -392,8 +392,7 @@ async function runAgent(
 
   try {
     let registeredContainerName: string | null = null;
-    let output!: Awaited<ReturnType<typeof runContainerAgent>>;
-    output = await runContainerAgent(
+    const output = await runContainerAgent(
       group,
       {
         prompt,
@@ -454,10 +453,22 @@ async function runAgent(
     }
 
     // Check for restart sentinel (skill install triggered)
-    const restartFile = path.join(DATA_DIR, 'sessions', group.folder, '.restart-skill');
+    const restartFile = path.join(
+      DATA_DIR,
+      'sessions',
+      group.folder,
+      '.restart-skill',
+    );
     if (fs.existsSync(restartFile)) {
-      try { fs.unlinkSync(restartFile); } catch { /* ignore */ }
-      logger.info({ group: group.name }, 'Restarting container for skill update');
+      try {
+        fs.unlinkSync(restartFile);
+      } catch {
+        /* ignore */
+      }
+      logger.info(
+        { group: group.name },
+        'Restarting container for skill update',
+      );
       queue.restartGroup(chatJid);
     }
 
@@ -604,6 +615,35 @@ async function main(): Promise<void> {
   initDatabase();
   logger.info('Database initialized');
   loadState();
+
+  // Auto-install skill-manager pi Extension for all registered groups.
+  // This gives container agents LLM-callable tools for skill management.
+  for (const [_jid, group] of Object.entries(registeredGroups)) {
+    const extensions = listExtensions(group.folder);
+    if (!extensions.includes('skill-manager')) {
+      try {
+        addExtension(group.folder, 'skill-manager');
+        logger.info(
+          { group: group.folder },
+          'Auto-installed skill-manager extension',
+        );
+        // Trigger container restart so the new extension is picked up
+        const restartFile = path.join(
+          DATA_DIR,
+          'sessions',
+          group.folder,
+          '.restart-skill',
+        );
+        fs.mkdirSync(path.dirname(restartFile), { recursive: true });
+        fs.writeFileSync(restartFile, '');
+      } catch (err) {
+        logger.warn(
+          { err, group: group.folder },
+          'Failed to auto-install skill-manager',
+        );
+      }
+    }
+  }
 
   restoreRemoteControl();
 

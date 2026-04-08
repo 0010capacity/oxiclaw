@@ -57,7 +57,7 @@ export function sanitizeHtmlForTelegram(html: string): string {
   // Step 4: Process remaining tags
   result = result.replace(
     /<(\/?)(\w+)([^>]*?)(\/?)>/g,
-    (match, closing, tag, attrs, selfClose) => {
+    (_match, closing, tag, attrs, selfClose) => {
       const lowerTag = tag.toLowerCase();
 
       // Strip unknown tags entirely (but keep their content)
@@ -65,37 +65,38 @@ export function sanitizeHtmlForTelegram(html: string): string {
         return '';
       }
 
-      // Process attributes — only keep href and class
+      // Process attributes — only keep href and class.
+      // attrs may have a leading space (e.g. " href="url""), so prepend a space
+      // when joining so the result is "<a href="url">" not "<ahref="url">".
       if (attrs.trim()) {
-        const cleanAttrs = attrs
-          .replace(
-            /(\w+)\s*=\s*["'][^"']*["']/g,
-            (attrMatch: string, attrName: string) => {
-              const lowerAttr = attrName.toLowerCase();
-              if (!ALLOWED_ATTRS.has(lowerAttr)) return '';
+        const cleanParts: string[] = [];
+        let match: RegExpExecArray | null;
+        const attrRegex = /(\w+)\s*=\s*["'][^"']*["']/g;
+        while ((match = attrRegex.exec(attrs)) !== null) {
+          const [, attrName] = match;
+          const lowerAttr = attrName.toLowerCase();
+          if (!ALLOWED_ATTRS.has(lowerAttr)) continue;
 
-              let value = attrMatch.match(/=["']([^"']*)["']/)?.[1] || '';
+          const value = match[0].match(/=["']([^"']*)["']/)?.[1] || '';
 
-              // Sanitize href values — block javascript:, data:, vbscript:, etc.
-              if (lowerAttr === 'href') {
-                const hrefLower = value.toLowerCase().trim();
-                if (
-                  hrefLower.startsWith('javascript:') ||
-                  hrefLower.startsWith('data:') ||
-                  hrefLower.startsWith('vbscript:') ||
-                  hrefLower.startsWith('on')
-                ) {
-                  return '';
-                }
-              }
+          // Sanitize href values — block javascript:, data:, vbscript:, etc.
+          if (lowerAttr === 'href') {
+            const hrefLower = value.toLowerCase().trim();
+            if (
+              hrefLower.startsWith('javascript:') ||
+              hrefLower.startsWith('data:') ||
+              hrefLower.startsWith('vbscript:') ||
+              hrefLower.startsWith('on')
+            ) {
+              continue;
+            }
+          }
 
-              return attrMatch;
-            },
-          )
-          .trim();
+          cleanParts.push(match[0]);
+        }
 
-        if (cleanAttrs) {
-          return `<${closing}${tag}${cleanAttrs}${selfClose}>`;
+        if (cleanParts.length > 0) {
+          return `<${closing}${tag} ${cleanParts.join(' ')}${selfClose}>`;
         }
       }
 

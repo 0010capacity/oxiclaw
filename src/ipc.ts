@@ -549,9 +549,15 @@ export async function processTaskIpc(
           try {
             fs.mkdirSync(sessionsDir, { recursive: true });
             fs.writeFileSync(path.join(sessionsDir, '.restart-skill'), '');
-            logger.info({ sourceGroup }, 'Restart sentinel written for skill install');
+            logger.info(
+              { sourceGroup },
+              'Restart sentinel written for skill install',
+            );
           } catch (err) {
-            logger.warn({ err, sourceGroup }, 'Failed to write restart sentinel');
+            logger.warn(
+              { err, sourceGroup },
+              'Failed to write restart sentinel',
+            );
           }
         }
       } else {
