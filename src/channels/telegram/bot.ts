@@ -31,6 +31,7 @@ import { ASSISTANT_NAME, GROUPS_DIR } from '../../config.js';
 import { sanitizeHtmlForTelegram } from '../../sanitize.js';
 import { SwarmRouter } from './swarm-router.js';
 import { MeetingManager } from './meeting-manager.js';
+import { registerSkillCommands } from './skill-commands.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -160,6 +161,9 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
     // promptAgent is optional — meeting responses are processed via
     // the orchestrator's normal message flow (processGroupMessages).
   });
+
+  // Register /skill commands for listing and managing container skills
+  registerSkillCommands(bot, registeredGroups);
 
   // -------------------------------------------------------------------------
   // Message handler
@@ -320,6 +324,7 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
     .setMyCommands([
       { command: 'meeting', description: 'Start an agent meeting' },
       { command: 'agents', description: 'List agents in this group' },
+      { command: 'skill', description: 'List and manage skills' },
     ])
     .catch((err: unknown) => {
       logger.warn({ err }, 'Failed to set Telegram bot commands');
