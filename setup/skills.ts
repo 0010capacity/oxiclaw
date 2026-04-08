@@ -20,12 +20,6 @@ interface SkillInfo {
 function detectInstalledChannels(projectRoot: string): string[] {
   const channels: string[] = [];
 
-  // WhatsApp: check store/auth directory
-  const authDir = path.join(projectRoot, 'store', 'auth');
-  if (fs.existsSync(authDir) && fs.readdirSync(authDir).length > 0) {
-    channels.push('whatsapp');
-  }
-
   // Telegram: check .env
   const envFile = path.join(projectRoot, '.env');
   if (fs.existsSync(envFile)) {
@@ -101,23 +95,6 @@ export async function run(args: string[]): Promise<void> {
   }
 
   // Channel-specific recommendations
-  if (channels.includes('whatsapp')) {
-    const whatsappSkills = [
-      { name: 'add-image-vision', reason: 'Describe images sent to you' },
-      {
-        name: 'add-voice-transcription',
-        reason: 'Transcribe voice messages',
-      },
-      { name: 'add-pdf-reader', reason: 'Read and summarize PDF documents' },
-      { name: 'add-reactions', reason: 'Respond to messages with emoji reactions' },
-    ];
-    for (const s of whatsappSkills) {
-      if (skillExists(s.name)) {
-        recommendations.push({ name: s.name, reason: s.reason, path: `.claude/skills/${s.name}` });
-      }
-    }
-  }
-
   if (channels.includes('telegram')) {
     if (skillExists('add-telegram-swarm')) {
       recommendations.push({

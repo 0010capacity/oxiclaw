@@ -37,7 +37,7 @@ If not found, tell the user:
 ### Check if already installed
 
 ```bash
-launchctl list | grep com.nanoclaw.statusbar
+launchctl list | grep com.oxiclaw.statusbar
 ```
 
 If it returns a PID (not `-`), tell the user it's already installed and skip to Phase 3 (Verify).
@@ -70,7 +70,7 @@ pwd
 echo $HOME
 ```
 
-Create `~/Library/LaunchAgents/com.nanoclaw.statusbar.plist`, substituting the actual values
+Create `~/Library/LaunchAgents/com.oxiclaw.statusbar.plist`, substituting the actual values
 for `{PROJECT_ROOT}` and `{HOME}`:
 
 ```xml
@@ -79,7 +79,7 @@ for `{PROJECT_ROOT}` and `{HOME}`:
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.nanoclaw.statusbar</string>
+    <string>com.oxiclaw.statusbar</string>
     <key>ProgramArguments</key>
     <array>
         <string>{PROJECT_ROOT}/dist/statusbar</string>
@@ -104,13 +104,13 @@ for `{PROJECT_ROOT}` and `{HOME}`:
 ### Load the service
 
 ```bash
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.statusbar.plist
+launchctl load ~/Library/LaunchAgents/com.oxiclaw.statusbar.plist
 ```
 
 ## Phase 3: Verify
 
 ```bash
-launchctl list | grep com.nanoclaw.statusbar
+launchctl list | grep com.oxiclaw.statusbar
 ```
 
 The first column should show a PID (not `-`).
@@ -127,7 +127,7 @@ Tell the user:
 ## Removal
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.statusbar.plist
-rm ~/Library/LaunchAgents/com.nanoclaw.statusbar.plist
+launchctl unload ~/Library/LaunchAgents/com.oxiclaw.statusbar.plist
+rm ~/Library/LaunchAgents/com.oxiclaw.statusbar.plist
 rm dist/statusbar
 ```

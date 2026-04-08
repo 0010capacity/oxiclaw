@@ -173,7 +173,7 @@ Expected: Both operations succeed.
 
 ```bash
 npm run build
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+launchctl kickstart -k gui/$(id -u)/com.oxiclaw
 ```
 
 Send a message via WhatsApp and verify the agent responds.

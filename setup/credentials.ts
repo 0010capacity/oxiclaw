@@ -74,7 +74,6 @@ export async function run(args: string[]): Promise<void> {
   // (The setup skill handles AskUserQuestion; this step emits a status
   // indicating credentials are pending, then the caller re-invokes with --api-key)
   const apiKeyIdx = args.indexOf('--api-key');
-  const oauthTokenIdx = args.indexOf('--oauth-token');
 
   if (apiKeyIdx !== -1 && args[apiKeyIdx + 1]) {
     const apiKey = args[apiKeyIdx + 1].trim();
@@ -109,34 +108,12 @@ export async function run(args: string[]): Promise<void> {
     return;
   }
 
-  if (oauthTokenIdx !== -1 && args[oauthTokenIdx + 1]) {
-    const token = args[oauthTokenIdx + 1].trim();
-    const auth = {
-      providers: {
-        anthropic: {
-          oauth_token: token,
-        },
-      },
-    };
-    fs.writeFileSync(authFile, JSON.stringify(auth, null, 2) + '\n', 'utf-8');
-    logger.info({ group }, 'OAuth token written to auth.json');
-
-    emitStatus('CREDENTIALS', {
-      GROUP: group,
-      CREDENTIALS: 'configured',
-      METHOD: 'oauth_token',
-      STATUS: 'success',
-      LOG: 'logs/setup.log',
-    });
-    return;
-  }
-
   // No credentials provided — prompt for them
   emitStatus('CREDENTIALS', {
     GROUP: group,
     CREDENTIALS: 'missing',
     STATUS: 'needs_input',
-    HINT: 'Run with --api-key <key> or --oauth-token <token>',
+    HINT: 'Run with --api-key <key>',
     LOG: 'logs/setup.log',
   });
 }

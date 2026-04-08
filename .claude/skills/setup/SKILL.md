@@ -66,7 +66,7 @@ Run `bash setup.sh` and parse the status block.
 
 Run `npx tsx setup/index.ts --step environment` and parse the status block.
 
-- If HAS_AUTH=true → WhatsApp is already configured, note for step 5
+- If HAS_AUTH=true → pi-mono SDK credentials already configured, skip step 4
 - If HAS_REGISTERED_GROUPS=true → note existing config, offer to skip or reconfigure
 - Record APPLE_CONTAINER and DOCKER values for step 3
 
@@ -136,34 +136,15 @@ The pi-mono SDK reads credentials from per-group `auth.json` files mounted into 
 
 Credentials are stored at `data/credentials/{group}/.pi/agent/`. Each group has its own credentials — the `main` group is configured first, additional groups can be configured later.
 
-### AskUserQuestion: How do you want to authenticate with Claude?
+pi-mono SDK supports Anthropic API keys only. If the user doesn't have one, direct them to https://console.anthropic.com/settings/keys.
 
-1. **Anthropic API key** — description: "Pay-per-use API key from console.anthropic.com. Best for most users."
-2. **Claude Pro/Max subscription** — description: "Uses your existing Claude Pro or Max subscription via `claude setup-token`."
-
-#### API key path
-
-Ask the user to get an API key from https://console.anthropic.com/settings/keys if they don't have one.
-
-Then ask: "Paste your API key (starts with `sk-ant-`)."
+Ask: "Paste your Anthropic API key (starts with `sk-ant-`)."
 
 **If the user's response contains a key starting with `sk-ant-`:** Use that key directly.
 
 Run: `npx tsx setup/index.ts --step credentials -- --api-key <key>`
 
 If the key doesn't start with `sk-ant-`, report an error and ask again.
-
-#### Subscription path (Claude Pro/Max)
-
-Tell the user:
-
-> Run `claude setup-token` in another terminal. It will output a token — copy it but don't paste it here.
-
-Then stop and wait for the user to confirm they have the token. Do NOT proceed until they respond.
-
-Once they confirm, ask: "Paste the token from `claude setup-token`."
-
-Run: `npx tsx setup/index.ts --step credentials -- --oauth-token <token>`
 
 ### After configuration
 
@@ -177,7 +158,6 @@ If not configured, re-run the credentials step with the correct values.
 ## 5. Set Up Channels
 
 AskUserQuestion (multiSelect): Which messaging channels do you want to enable?
-- WhatsApp (authenticates via QR code or pairing code)
 - Telegram (authenticates via bot token from @BotFather)
 - Slack (authenticates via Slack app with Socket Mode)
 - Discord (authenticates via Discord bot token)
@@ -185,7 +165,6 @@ AskUserQuestion (multiSelect): Which messaging channels do you want to enable?
 **Delegate to each selected channel's own skill.** Each channel skill handles its own code installation, authentication, registration, and JID resolution. This avoids duplicating channel-specific logic and ensures JIDs are always correct.
 
 For each selected channel, invoke its skill:
-- **WhatsApp:** Invoke `/add-whatsapp`
 - **Telegram:** Invoke `/add-telegram`
 - **Slack:** Invoke `/add-slack`
 - **Discord:** Invoke `/add-discord`
@@ -266,12 +245,6 @@ AskUserQuestion (multiSelect) with the detected channels as context:
 **Always recommended:**
 - **/add-compact** — "Prevents context rotation and improves long-term memory"
 
-**If WhatsApp installed:**
-- **/add-image-vision** — "Describe images sent to you"
-- **/add-voice-transcription** — "Transcribe voice messages"
-- **/add-pdf-reader** — "Read and summarize PDF documents"
-- **/add-reactions** — "Respond to messages with emoji reactions"
-
 **If Telegram installed:**
 - **/add-telegram-swarm** — "Enable per-agent bot identities via @agent_* mentions"
 
@@ -296,5 +269,5 @@ For each selected skill: invoke it with its skill name (e.g., invoke `/add-compa
 **Service not starting:** Check `logs/oxiclaw.error.log`. Common: wrong Node path (re-run step 7), credential not configured (check `data/credentials/main/.pi/agent/auth.json`), missing channel credentials (re-invoke channel skill).
 **Container agent fails ("Claude Code process exited with code 1"):** Ensure the container runtime is running — `open -a Docker` (macOS Docker), `container system start` (Apple Container), or `sudo systemctl start docker` (Linux). Check container logs in `groups/main/logs/container-*.log`.
 **No response to messages:** Check trigger pattern. Main channel doesn't need prefix. Check DB: `npx tsx setup/index.ts --step verify`. Check `logs/oxiclaw.log`.
-**Channel not connecting:** Verify the channel's credentials are set in `.env`. Channels auto-enable when their credentials are present. For WhatsApp: check `store/auth/creds.json` exists. For token-based channels: check token values in `.env`. Restart the service after any `.env` change.
+**Channel not connecting:** Verify the channel's credentials are set in `.env`. Channels auto-enable when their credentials are present. For token-based channels: check token values in `.env`. Restart the service after any `.env` change.
 **Unload service:** macOS: `launchctl unload ~/Library/LaunchAgents/com.oxiclaw.plist` | Linux: `systemctl --user stop oxiclaw`

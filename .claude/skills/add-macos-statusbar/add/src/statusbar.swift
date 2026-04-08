@@ -5,9 +5,9 @@ class StatusBarController: NSObject {
     private var isRunning = false
     private var timer: Timer?
 
-    private let plistPath = "\(NSHomeDirectory())/Library/LaunchAgents/com.nanoclaw.plist"
+    private let plistPath = "\(NSHomeDirectory())/Library/LaunchAgents/com.oxiclaw.plist"
 
-    /// Derive the NanoClaw project root from the binary location.
+    /// Derive the OxiClaw project root from the binary location.
     /// The binary is compiled to {project}/dist/statusbar, so the parent of
     /// the parent directory is the project root.
     private static let projectRoot: String = {
@@ -40,14 +40,14 @@ class StatusBarController: NSObject {
             } else {
                 button.title = "⚡"
             }
-            button.toolTip = "NanoClaw"
+            button.toolTip = "OxiClaw"
         }
     }
 
     private func checkRunning() -> Bool {
         let task = Process()
         task.launchPath = "/bin/launchctl"
-        task.arguments = ["list", "com.nanoclaw"]
+        task.arguments = ["list", "com.oxiclaw"]
         let pipe = Pipe()
         task.standardOutput = pipe
         task.standardError = Pipe()
@@ -111,12 +111,12 @@ class StatusBarController: NSObject {
 
     @objc private func restartService() {
         let uid = getuid()
-        run("/bin/launchctl", ["kickstart", "-k", "gui/\(uid)/com.nanoclaw"])
+        run("/bin/launchctl", ["kickstart", "-k", "gui/\(uid)/com.oxiclaw"])
         refresh(after: 3)
     }
 
     @objc private func viewLogs() {
-        let logPath = "\(StatusBarController.projectRoot)/logs/nanoclaw.log"
+        let logPath = "\(StatusBarController.projectRoot)/logs/oxiclaw.log"
         NSWorkspace.shared.open(URL(fileURLWithPath: logPath))
     }
 

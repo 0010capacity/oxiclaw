@@ -32,7 +32,7 @@ git remote -v
 If `telegram` is missing, add it:
 
 ```bash
-git remote add telegram https://github.com/qwibitai/nanoclaw-telegram.git
+git remote add telegram https://github.com/qwibitai/oxiclaw-telegram.git
 ```
 
 ### Merge the skill branch
@@ -115,7 +115,7 @@ Tell the user:
 
 ```bash
 npm run build
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
+launchctl kickstart -k gui/$(id -u)/com.oxiclaw  # macOS
 # Linux: systemctl --user restart nanoclaw
 ```
 
@@ -192,10 +192,10 @@ If `/chatid` doesn't work:
 If running `npm run dev` while the service is active:
 ```bash
 # macOS:
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl unload ~/Library/LaunchAgents/com.oxiclaw.plist
 npm run dev
 # When done testing:
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
+launchctl load ~/Library/LaunchAgents/com.oxiclaw.plist
 # Linux:
 # systemctl --user stop nanoclaw
 # npm run dev
@@ -211,4 +211,4 @@ To remove Telegram integration:
 3. Remove `TELEGRAM_BOT_TOKEN` from `.env`
 4. Remove Telegram registrations from SQLite: `sqlite3 store/messages.db "DELETE FROM registered_groups WHERE jid LIKE 'tg:%'"`
 5. Uninstall: `npm uninstall grammy`
-6. Rebuild: `npm run build && launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `npm run build && systemctl --user restart nanoclaw` (Linux)
+6. Rebuild: `npm run build && launchctl kickstart -k gui/$(id -u)/com.oxiclaw` (macOS) or `npm run build && systemctl --user restart nanoclaw` (Linux)

@@ -6,10 +6,14 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'fs';
-import { join } from 'path';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const GLOBAL_EXTENSIONS = join(__dirname, '../../container/extensions');
-const GROUPS_EXTENSIONS_BASE = join(__dirname, '../../groups');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const GLOBAL_EXTENSIONS = path.join(__dirname, '../../container/extensions');
+const GROUPS_EXTENSIONS_BASE = path.join(__dirname, '../../groups');
 
 /**
  * Validate a groupId to prevent path traversal attacks.
@@ -43,7 +47,7 @@ export const AVAILABLE_EXTENSIONS = [
 export function listExtensions(groupId?: string): string[] {
   if (groupId) {
     validateGroupId(groupId);
-    const groupDir = join(GROUPS_EXTENSIONS_BASE, groupId, 'extensions');
+    const groupDir = path.join(GROUPS_EXTENSIONS_BASE, groupId, 'extensions');
     if (!existsSync(groupDir)) return [];
     return readdirSync(groupDir)
       .filter((f) => f.endsWith('.ts'))
@@ -66,14 +70,14 @@ export function addExtension(groupId: string, name: string): void {
   }
 
   // Ensure group extensions directory exists
-  const groupExtDir = join(GROUPS_EXTENSIONS_BASE, groupId, 'extensions');
+  const groupExtDir = path.join(GROUPS_EXTENSIONS_BASE, groupId, 'extensions');
   if (!existsSync(groupExtDir)) {
     mkdirSync(groupExtDir, { recursive: true });
   }
 
   // Copy global extension to group-specific extensions
-  const src = join(GLOBAL_EXTENSIONS, `${name}.ts`);
-  const dst = join(groupExtDir, `${name}.ts`);
+  const src = path.join(GLOBAL_EXTENSIONS, `${name}.ts`);
+  const dst = path.join(groupExtDir, `${name}.ts`);
 
   if (!existsSync(src)) {
     throw new Error(`Extension source not found: ${src}`);
@@ -91,7 +95,12 @@ export function addExtension(groupId: string, name: string): void {
  */
 export function removeExtension(groupId: string, name: string): void {
   validateGroupId(groupId);
-  const dst = join(GROUPS_EXTENSIONS_BASE, groupId, 'extensions', `${name}.ts`);
+  const dst = path.join(
+    GROUPS_EXTENSIONS_BASE,
+    groupId,
+    'extensions',
+    `${name}.ts`,
+  );
   if (existsSync(dst)) {
     unlinkSync(dst);
     console.log(`[extension-manager] Removed ${name} from group ${groupId}`);
@@ -133,7 +142,7 @@ export function getExtensionInfo(
  */
 function triggerContainerRestart(groupId: string): void {
   validateGroupId(groupId);
-  const sentinel = join(GROUPS_EXTENSIONS_BASE, groupId, '.restart');
+  const sentinel = path.join(GROUPS_EXTENSIONS_BASE, groupId, '.restart');
   writeFileSync(sentinel, String(Date.now()));
   console.log(`[extension-manager] Triggered restart for group ${groupId}`);
 }
