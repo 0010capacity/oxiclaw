@@ -9,6 +9,9 @@
 
 import { createAgentSession, createCodingTools } from '@mariozechner/pi-coding-agent';
 import { IPCBridge } from './ipc-bridge.js';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 const ORCHESTRATOR_SOCKET = process.env.OXICLAW_IPC_SOCKET || '/tmp/oxiclaw-ipc.sock';
 
@@ -138,29 +141,67 @@ async function handleCancelRequest(_params: Record<string, unknown>): Promise<vo
 }
 
 async function readStdinRequests(): Promise<void> {
-  const stdinData = await new Promise<string>((resolve) => {
-    let data = '';
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (chunk) => { data += chunk; });
-    process.stdin.on('end', () => resolve(data));
-    process.stdin.on('error', () => resolve(''));
-    setTimeout(() => resolve(data), 200);
+  let buffer = '';
+  let isShuttingDown = false;
+
+  const processLine = (line: string): void => {
+    if (!line.trim()) return;
+    try {
+      const req: StdinRequest = JSON.parse(line);
+      handleStdinRequest(req).catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        log(`Request error: ${message}`);
+        respond(null, undefined, { code: -32603, message });
+      });
+    } catch (e) {
+      log(`Failed to parse stdin JSON: ${e instanceof Error ? e.message : String(e)}`);
+      respond(null, undefined, { code: -32700, message: 'Parse error' });
+    }
+  };
+
+  const shutdown = (signal: string): void => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    log(`Shutdown signal (${signal}), closing stdin listener`);
+    process.stdin.pause();
+  };
+
+  process.stdin.setEncoding('utf8');
+
+  // Handle graceful shutdown
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+
+  process.stdin.on('data', (chunk: string) => {
+    if (isShuttingDown) return;
+    buffer += chunk;
+    // Process all complete lines (newline-delimited JSON-RPC)
+    let newlineIndex: number;
+    while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+      const line = buffer.slice(0, newlineIndex);
+      buffer = buffer.slice(newlineIndex + 1);
+      processLine(line);
+    }
   });
 
-  if (!stdinData.trim()) {
-    log('No stdin data, initializing session automatically');
-    await handleInitRequest({});
-    return;
-  }
+  process.stdin.on('end', () => {
+    if (isShuttingDown) return;
+    // Process any remaining content in the buffer
+    if (buffer.trim()) {
+      processLine(buffer.trim());
+    }
+    // If no session was initialized and stdin ended cleanly, init now
+    if (!currentSession) {
+      log('Stdin ended, initializing session automatically');
+      handleInitRequest({}).catch((err) => {
+        log(`Auto-init error: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }
+  });
 
-  const firstLine = stdinData.trim().split('\n')[0];
-  try {
-    const req: StdinRequest = JSON.parse(firstLine);
-    await handleStdinRequest(req);
-  } catch (e) {
-    log(`Failed to parse stdin JSON: ${e instanceof Error ? e.message : String(e)}`);
-    respond(null, undefined, { code: -32700, message: 'Parse error' });
-  }
+  process.stdin.on('error', () => {
+    log('Stdin error, continuing...');
+  });
 }
 
 async function handleStdinRequest(req: StdinRequest): Promise<void> {
@@ -188,6 +229,22 @@ async function handleStdinRequest(req: StdinRequest): Promise<void> {
         break;
 
       case 'health_check':
+        // Write response to temp file for orchestrator health checker to poll.
+        // Matches the sendHealthCheckViaIPC pattern in health-checker.ts.
+        const tmpDir = fs.realpathSync(os.tmpdir());
+        const respFile = path.join(tmpDir, `oxiclaw-health-${SESSION_ID}-resp.json`);
+        const respContent = JSON.stringify({
+          ok: true,
+          active: currentSession !== null,
+          timestamp: new Date().toISOString(),
+        });
+        try {
+          fs.writeFileSync(respFile, respContent);
+          log(`Health check response written to ${respFile}`);
+        } catch (writeErr) {
+          log(`Health check response write failed: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`);
+        }
+        // Also respond via stdout for direct callers
         respond(req.id ?? null, {
           session_id: SESSION_ID,
           active: currentSession !== null,

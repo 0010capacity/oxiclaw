@@ -11,6 +11,23 @@ import { join } from 'path';
 const GLOBAL_EXTENSIONS = join(__dirname, '../../container/extensions');
 const GROUPS_EXTENSIONS_BASE = join(__dirname, '../../groups');
 
+/**
+ * Validate a groupId to prevent path traversal attacks.
+ * Rejects paths with "..", leading "/", backslashes, or empty strings.
+ */
+function validateGroupId(groupId: string): void {
+  if (
+    !groupId ||
+    groupId.includes('..') ||
+    groupId.startsWith('/') ||
+    groupId.includes('\\') ||
+    groupId.includes(':') ||
+    groupId.includes('\0')
+  ) {
+    throw new Error(`Invalid groupId: "${groupId}"`);
+  }
+}
+
 export const AVAILABLE_EXTENSIONS = [
   // CLI-based skills (spotify, telegram, tts) are now SKILL.md-based in container/skills/
   'zai-image',
@@ -24,6 +41,7 @@ export const AVAILABLE_EXTENSIONS = [
  */
 export function listExtensions(groupId?: string): string[] {
   if (groupId) {
+    validateGroupId(groupId);
     const groupDir = join(GROUPS_EXTENSIONS_BASE, groupId, 'extensions');
     if (!existsSync(groupDir)) return [];
     return readdirSync(groupDir)
@@ -37,6 +55,8 @@ export function listExtensions(groupId?: string): string[] {
  * Add an extension to a group.
  */
 export function addExtension(groupId: string, name: string): void {
+  validateGroupId(groupId);
+
   // Validate extension name
   if (!AVAILABLE_EXTENSIONS.includes(name)) {
     throw new Error(
@@ -69,6 +89,7 @@ export function addExtension(groupId: string, name: string): void {
  * Remove an extension from a group.
  */
 export function removeExtension(groupId: string, name: string): void {
+  validateGroupId(groupId);
   const dst = join(GROUPS_EXTENSIONS_BASE, groupId, 'extensions', `${name}.ts`);
   if (existsSync(dst)) {
     unlinkSync(dst);
@@ -110,6 +131,7 @@ export function getExtensionInfo(
  * Trigger container restart by writing to a sentinel file.
  */
 function triggerContainerRestart(groupId: string): void {
+  validateGroupId(groupId);
   const sentinel = join(GROUPS_EXTENSIONS_BASE, groupId, '.restart');
   writeFileSync(sentinel, String(Date.now()));
   console.log(`[extension-manager] Triggered restart for group ${groupId}`);

@@ -28,7 +28,7 @@ import {
 import { registerChannel, ChannelOpts } from '../registry.js';
 import { logger } from '../../logger.js';
 import { ASSISTANT_NAME, GROUPS_DIR } from '../../config.js';
-import { registerExtensionCommands } from './extension-commands.js';
+import { sanitizeHtmlForTelegram } from '../../sanitize.js';
 import { SwarmRouter } from './swarm-router.js';
 import { MeetingManager } from './meeting-manager.js';
 
@@ -138,7 +138,7 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
         return;
       }
       const chatId = extractChatId(jid);
-      await bot!.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
+      await bot!.telegram.sendMessage(chatId, sanitizeHtmlForTelegram(text), { parse_mode: 'HTML' });
     },
     registeredGroups,
   });
@@ -151,7 +151,7 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
         return;
       }
       const chatId = extractChatId(jid);
-      await bot!.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
+      await bot!.telegram.sendMessage(chatId, sanitizeHtmlForTelegram(text), { parse_mode: 'HTML' });
     },
     // promptAgent is optional — meeting responses are processed via
     // the orchestrator's normal message flow (processGroupMessages).
@@ -311,15 +311,11 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
     }
   });
 
-  // /extension commands — manage pi Extensions
-  registerExtensionCommands(bot, registeredGroups);
-
   // Register bot commands with Telegram
   bot.telegram
     .setMyCommands([
       { command: 'meeting', description: 'Start an agent meeting' },
       { command: 'agents', description: 'List agents in this group' },
-      { command: 'extension', description: 'Manage extensions' },
     ])
     .catch((err: unknown) => {
       logger.warn({ err }, 'Failed to set Telegram bot commands');

@@ -15,6 +15,7 @@
  * - Agent session lifecycle hooks for the orchestrator
  */
 
+import { sanitizeHtmlForTelegram } from '../../sanitize.js';
 import { Telegraf } from 'telegraf';
 import type { ParseMode } from '@telegraf/types';
 
@@ -72,7 +73,7 @@ export interface RoutedMessage {
  *
  * Example: "@agent_marketer strategy?" → ["marketer"]
  */
-const AGENT_MENTION_REGEX = /@agent_(\w+)/g;
+const AGENT_MENTION_REGEX = /@agent_(\w+)/;
 
 /**
  * Pattern for the mention-all trigger.
@@ -262,11 +263,9 @@ export class SwarmRouter {
    */
   parseMentions(text: string): string[] {
     const agents: string[] = [];
-    let match: RegExpExecArray | null;
 
-    // Reset regex lastIndex for global matching
-    AGENT_MENTION_REGEX.lastIndex = 0;
-    while ((match = AGENT_MENTION_REGEX.exec(text)) !== null) {
+    // Use matchAll for non-global regex — cleaner and avoids lastIndex issues
+    for (const match of text.matchAll(AGENT_MENTION_REGEX)) {
       agents.push(match[1].toLowerCase());
     }
 
@@ -373,7 +372,7 @@ export class SwarmRouter {
       if (replyToMessageId) {
         options.reply_parameters = { message_id: replyToMessageId };
       }
-      await this.bot.telegram.sendMessage(chatId, formatted, options);
+      await this.bot.telegram.sendMessage(chatId, sanitizeHtmlForTelegram(formatted), options);
     } catch (err) {
       logger.error(
         { err, chatJid, agentName },

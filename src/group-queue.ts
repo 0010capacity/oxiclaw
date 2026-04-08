@@ -142,6 +142,23 @@ export class GroupQueue {
   }
 
   /**
+   * Get the stdin handle for a group's container.
+   * Used by the health checker to send stdin-based health check requests.
+   */
+  getStdin(groupJid: string): NodeJS.WritableStream | null {
+    const state = this.getGroup(groupJid);
+    return state.process?.stdin ?? null;
+  }
+
+  /**
+   * Get the container name for a group's container.
+   */
+  getContainerName(groupJid: string): string | null {
+    const state = this.getGroup(groupJid);
+    return state.containerName;
+  }
+
+  /**
    * Mark the container as idle-waiting (finished work, waiting for IPC input).
    * If tasks are pending, preempt the idle container immediately.
    */

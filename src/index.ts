@@ -43,6 +43,9 @@ import {
   setSession,
   storeChatMetadata,
   storeMessage,
+  createAgentSession,
+  endAgentSession,
+  updateAgentSession,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
@@ -61,6 +64,10 @@ import {
 } from './sender-allowlist.js';
 import { startHealthChecker } from './health-checker.js';
 import { startSessionCleanup } from './session-cleanup.js';
+import {
+  initAutonomousMessages,
+  getAutonomousMessageManager,
+} from './autonomous-messages.js';
 import {
   discoverAgents,
   getActiveAgents,
@@ -281,6 +288,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
       }
+      // Check for autonomous message triggers after each agent response
+      const autoManager = getAutonomousMessageManager();
+      if (autoManager) {
+        const sessionId = `group-${group.folder}`;
+        await autoManager.handleAgentResponse(sessionId, chatJid, text);
+      }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
     }
@@ -366,8 +379,20 @@ async function runAgent(
       }
     : undefined;
 
+  // Track agent session in SQLite for health checker monitoring
+  // Declared outside try so catch block can also end the session
+  const agentSessionId = `agent-${group.folder}-${Date.now()}`;
+  createAgentSession({
+    id: agentSessionId,
+    group_id: group.folder,
+    container_id: group.folder, // Use group folder as container ID for lookup
+    metadata: { chatJid, isMain },
+  });
+
   try {
-    const output = await runContainerAgent(
+    let registeredContainerName: string | null = null;
+    let output!: Awaited<ReturnType<typeof runContainerAgent>>;
+    output = await runContainerAgent(
       group,
       {
         prompt,
@@ -377,10 +402,20 @@ async function runAgent(
         isMain,
         assistantName: ASSISTANT_NAME,
       },
-      (proc, containerName) =>
-        queue.registerProcess(chatJid, proc, containerName, group.folder),
+      (proc, containerName) => {
+        registeredContainerName = containerName;
+        queue.registerProcess(chatJid, proc, containerName, group.folder);
+      },
       wrappedOnOutput,
     );
+
+    // Update session with container name for health check lookup
+    if (registeredContainerName) {
+      updateAgentSession(agentSessionId, { container_id: registeredContainerName });
+    }
+
+    // End the agent session
+    endAgentSession(agentSessionId);
 
     if (output.newSessionId) {
       sessions[group.folder] = output.newSessionId;
@@ -417,6 +452,7 @@ async function runAgent(
 
     return 'success';
   } catch (err) {
+    endAgentSession(agentSessionId);
     logger.error({ group: group.name, err }, 'Agent error');
     return 'error';
   }
@@ -735,7 +771,89 @@ async function main(): Promise<void> {
     },
   });
   startSessionCleanup();
+  initAutonomousMessages({
+    sendMessage: async (jid: string, text: string) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) {
+        logger.warn({ jid }, 'No channel owns JID, cannot send autonomous message');
+        return;
+      }
+      const formatted = formatOutbound(text);
+      if (formatted) await channel.sendMessage(jid, formatted);
+    },
+    promptAgent: async () => {
+      // promptAgent is not used for autonomous messages — responses arrive via
+      // handleAgentResponse which is called by the orchestrator's message flow.
+      return '';
+    },
+  });
   startHealthChecker({
+    sendHealthCheck: async (containerId: string) => {
+      // Transport: write JSON-RPC request to a temp file, container writes response
+      // to another temp file which we poll. This is the same pattern as the
+      // built-in sendHealthCheckViaIPC but triggered via stdin so the container
+      // knows it's a health check (vs. task IPC files).
+      const tmpDir = fs.realpathSync(process.env.TMPDIR || '/tmp');
+      const requestFile = path.join(tmpDir, `oxiclaw-health-${containerId}.json`);
+      const responseFile = path.join(tmpDir, `oxiclaw-health-${containerId}-resp.json`);
+
+      const requestId = `health-${Date.now()}`;
+      const request = {
+        jsonrpc: '2.0',
+        id: requestId,
+        method: 'health_check',
+        params: {},
+      };
+
+      // Clean up stale response file
+      try {
+        fs.unlinkSync(responseFile);
+      } catch { /* ignore */ }
+
+      // Write request atomically
+      const tmpRequest = `${requestFile}.tmp`;
+      fs.writeFileSync(tmpRequest, JSON.stringify(request) + '\n');
+      fs.renameSync(tmpRequest, requestFile);
+
+      // Also send via stdin so container processes it immediately
+      const stdin = queue.getStdin(
+        Object.keys(registeredGroups).find((jid) => queue.getContainerName(jid) === containerId) || '',
+      );
+      if (stdin) {
+        try {
+          stdin.write(JSON.stringify(request) + '\n');
+        } catch { /* stdin may not be writable */ }
+      }
+
+      // Poll for response file with timeout
+      return new Promise<import('./health-checker.js').HealthCheckResponse>((resolve, reject) => {
+        const deadline = Date.now() + 10_000;
+        const pollInterval = setInterval(() => {
+          if (Date.now() > deadline) {
+            clearInterval(pollInterval);
+            try {
+              fs.unlinkSync(requestFile);
+            } catch { /* ignore */ }
+            reject(new Error('Health check request timed out'));
+            return;
+          }
+          try {
+            if (fs.existsSync(responseFile)) {
+              clearInterval(pollInterval);
+              const content = fs.readFileSync(responseFile, 'utf-8');
+              try {
+                fs.unlinkSync(responseFile);
+              } catch { /* ignore */ }
+              try {
+                fs.unlinkSync(requestFile);
+              } catch { /* ignore */ }
+              const response = JSON.parse(content);
+              resolve(response as import('./health-checker.js').HealthCheckResponse);
+            }
+          } catch { /* poll continues */ }
+        }, 500);
+      });
+    },
     onRestartNeeded: async (session) => {
       logger.warn(
         {
@@ -826,6 +944,12 @@ async function main(): Promise<void> {
                     text,
                     msg.messageId,
                   );
+                }
+                // Check for autonomous message triggers after each agent response
+                const autoManager = getAutonomousMessageManager();
+                if (autoManager) {
+                  const sessionId = `swarm-${msg.chatJid}-${agentName}`;
+                  await autoManager.handleAgentResponse(sessionId, msg.chatJid, text);
                 }
               }
               if (output.status === 'success') {

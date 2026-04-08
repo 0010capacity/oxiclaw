@@ -289,6 +289,9 @@ async function buildContainerArgs(
   // Point it to the mounted per-group agent directory
   args.push('-e', 'XDG_CONFIG_HOME=/workspace/group');
 
+  // Pass container name as session ID for health check response file correlation
+  args.push('-e', `AGENT_SESSION_ID=${containerName}`);
+
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
 

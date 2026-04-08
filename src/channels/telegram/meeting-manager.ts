@@ -134,6 +134,9 @@ export class MeetingManager extends EventEmitter {
   /** Timer for checking meeting timeouts. */
   private timeoutChecker: ReturnType<typeof setInterval> | null = null;
 
+  /** Track summarizing auto-completion timers to prevent memory leaks. */
+  private summarizingTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
   private constructor() {
     super();
   }
@@ -165,6 +168,11 @@ export class MeetingManager extends EventEmitter {
   static destroy(): void {
     if (instance) {
       instance.stopTimeoutChecker();
+      // Clear all summarizing timeouts to prevent memory leaks
+      for (const timer of instance.summarizingTimeouts.values()) {
+        clearTimeout(timer);
+      }
+      instance.summarizingTimeouts.clear();
       instance.meetings.clear();
       instance = null;
     }
@@ -310,7 +318,22 @@ export class MeetingManager extends EventEmitter {
     content: string,
   ): Promise<boolean> {
     const meeting = this.meetings.get(chatJid);
-    if (!meeting || meeting.state !== 'in_progress') return false;
+    if (!meeting) return false;
+
+    // Handle summarizing state — capture the summary and transition
+    if (meeting.state === 'summarizing') {
+      meeting.summary = content.trim() || null;
+      // Cancel the auto-completion timer since we have a real summary
+      const timer = this.summarizingTimeouts.get(chatJid);
+      if (timer) {
+        clearTimeout(timer);
+        this.summarizingTimeouts.delete(chatJid);
+      }
+      await this.transition(chatJid, 'completed');
+      return true;
+    }
+
+    if (meeting.state !== 'in_progress') return false;
 
     // Check if this agent can speak
     if (!this.canSpeak(chatJid, agentName)) {
@@ -372,6 +395,15 @@ export class MeetingManager extends EventEmitter {
     if (!meeting) {
       logger.error({ chatJid }, 'No meeting found for state transition');
       return;
+    }
+
+    // Clear summarizing timeout when leaving summarizing state
+    if (meeting.state === 'summarizing' && newState !== 'summarizing') {
+      const timer = this.summarizingTimeouts.get(chatJid);
+      if (timer) {
+        clearTimeout(timer);
+        this.summarizingTimeouts.delete(chatJid);
+      }
     }
 
     const oldState = meeting.state;
@@ -463,7 +495,8 @@ export class MeetingManager extends EventEmitter {
     // The orchestrator will call processAgentResponse which will
     // detect we're in "summarizing" state and trigger completion.
     // For now, auto-transition after a brief delay.
-    setTimeout(async () => {
+    const timer = setTimeout(async () => {
+      this.summarizingTimeouts.delete(chatJid);
       const current = this.meetings.get(chatJid);
       if (current && current.state === 'summarizing') {
         // Use the last turn as the summary
@@ -474,6 +507,7 @@ export class MeetingManager extends EventEmitter {
         await this.transition(chatJid, 'completed');
       }
     }, 5000);
+    this.summarizingTimeouts.set(chatJid, timer);
   }
 
   private async onCompleted(chatJid: string): Promise<void> {
@@ -516,6 +550,13 @@ export class MeetingManager extends EventEmitter {
   }
 
   private async onCancelled(chatJid: string): Promise<void> {
+    // Clear any pending summarizing timeout
+    const timer = this.summarizingTimeouts.get(chatJid);
+    if (timer) {
+      clearTimeout(timer);
+      this.summarizingTimeouts.delete(chatJid);
+    }
+
     const meeting = this.meetings.get(chatJid);
     if (!meeting) return;
 
