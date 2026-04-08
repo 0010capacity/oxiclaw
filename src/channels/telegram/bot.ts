@@ -345,10 +345,18 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
         logger.error({ err }, 'Telegraf error');
       });
 
-      // Launch with long polling (grammY/Telegraf pattern)
-      await bot.launch({
-        allowedUpdates: ['message', 'edited_message'],
-      });
+      // Launch with long polling (grammY/Telegraf pattern).
+      // NOTE: launch() starts background polling and returns a Promise that
+      // resolves on SIGTERM/SIGINT (shutdown). We must NOT await it —
+      // awaiting would block the entire orchestrator startup.
+      try {
+        bot.launch({
+          allowedUpdates: ['message', 'edited_message'],
+        });
+      } catch (err) {
+        logger.error({ err }, 'Failed to launch Telegram bot');
+        throw err;
+      }
 
       logger.info('Telegram bot connected');
     },
