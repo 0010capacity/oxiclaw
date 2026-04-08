@@ -177,7 +177,9 @@ function writeIpcResponse(
   const extResponse = {
     id: taskId,
     status: response.ok ? 'done' : 'error',
-    result: response.message + (response.skills ? '\n' + JSON.stringify(response.skills, null, 2) : ''),
+    result:
+      response.message +
+      (response.skills ? '\n' + JSON.stringify(response.skills, null, 2) : ''),
     error: response.ok ? undefined : response.message,
   };
   fs.writeFileSync(filePath, JSON.stringify(extResponse, null, 2));
@@ -530,7 +532,9 @@ export async function processTaskIpc(
 
     case 'install_skill':
       if (isMain && data.skillNameOrUrl) {
-        const result = await installSkill(data.skillNameOrUrl, { force: data.force });
+        const result = await installSkill(data.skillNameOrUrl, {
+          force: data.force,
+        });
         const response = {
           ok: result.ok,
           message: result.ok
@@ -538,6 +542,18 @@ export async function processTaskIpc(
             : result.error || 'Failed to install skill',
         };
         writeIpcResponse(sourceGroup, data.taskId, response);
+
+        // Write restart sentinel so the container restarts to pick up the new skill
+        if (result.ok) {
+          const sessionsDir = path.join(DATA_DIR, 'sessions', sourceGroup);
+          try {
+            fs.mkdirSync(sessionsDir, { recursive: true });
+            fs.writeFileSync(path.join(sessionsDir, '.restart-skill'), '');
+            logger.info({ sourceGroup }, 'Restart sentinel written for skill install');
+          } catch (err) {
+            logger.warn({ err, sourceGroup }, 'Failed to write restart sentinel');
+          }
+        }
       } else {
         logger.warn(
           { sourceGroup },
@@ -597,7 +613,10 @@ export async function processTaskIpc(
           skills,
         });
       } else {
-        logger.warn({ sourceGroup }, 'Unauthorized list_available_skills attempt');
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized list_available_skills attempt',
+        );
         writeIpcResponse(sourceGroup, data.taskId, {
           ok: false,
           message: 'Unauthorized',

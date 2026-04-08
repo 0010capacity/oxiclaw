@@ -3,6 +3,7 @@ import path from 'path';
 
 import {
   ASSISTANT_NAME,
+  DATA_DIR,
   DEFAULT_TRIGGER,
   getTriggerPattern,
   GROUPS_DIR,
@@ -450,6 +451,14 @@ async function runAgent(
         'Container agent error',
       );
       return 'error';
+    }
+
+    // Check for restart sentinel (skill install triggered)
+    const restartFile = path.join(DATA_DIR, 'sessions', group.folder, '.restart-skill');
+    if (fs.existsSync(restartFile)) {
+      try { fs.unlinkSync(restartFile); } catch { /* ignore */ }
+      logger.info({ group: group.name }, 'Restarting container for skill update');
+      queue.restartGroup(chatJid);
     }
 
     return 'success';

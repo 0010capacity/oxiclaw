@@ -361,6 +361,30 @@ export class GroupQueue {
     }
   }
 
+  /**
+   * Restart a group's container: kill the active process, clear state, and
+   * re-enqueue to start a fresh container.
+   * Safe to call even if the group is not active or has no process.
+   */
+  restartGroup(jid: string): void {
+    if (this.shuttingDown) return;
+
+    const state = this.getGroup(jid);
+
+    if (state.process && !state.process.killed) {
+      state.process.kill('SIGTERM');
+    }
+
+    state.process = null;
+    state.containerName = null;
+    state.active = false;
+    state.idleWaiting = false;
+
+    logger.info({ jid }, 'Restarting group container');
+
+    this.enqueueMessageCheck(jid);
+  }
+
   async shutdown(_gracePeriodMs: number): Promise<void> {
     this.shuttingDown = true;
 
