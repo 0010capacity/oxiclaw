@@ -3,6 +3,13 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
+import {
+  installSkill,
+  listAvailableSkills,
+  listInstalledSkills,
+  removeSkill,
+} from './skill-manager.js';
+
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
@@ -155,6 +162,30 @@ export function startIpcWatcher(deps: IpcDeps): void {
   logger.info('IPC watcher started (per-group namespaces)');
 }
 
+// --- Helpers ---
+
+function writeIpcResponse(
+  sourceGroup: string,
+  taskId: string | undefined,
+  response: { ok: boolean; message: string; skills?: unknown[] },
+): void {
+  if (!taskId) return;
+  const resultsDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'task-results');
+  fs.mkdirSync(resultsDir, { recursive: true });
+  const filePath = path.join(resultsDir, `${taskId}.json`);
+  // pi Extension expects: { id, status: 'done'|'error', result, error }
+  const extResponse = {
+    id: taskId,
+    status: response.ok ? 'done' : 'error',
+    result: response.message + (response.skills ? '\n' + JSON.stringify(response.skills, null, 2) : ''),
+    error: response.ok ? undefined : response.message,
+  };
+  fs.writeFileSync(filePath, JSON.stringify(extResponse, null, 2));
+  logger.debug({ filePath }, 'IPC task response written');
+}
+
+// --- Main ---
+
 export async function processTaskIpc(
   data: {
     type: string;
@@ -177,6 +208,9 @@ export async function processTaskIpc(
     // For send_file
     filePath?: string;
     caption?: string;
+    // For skill tasks
+    skillNameOrUrl?: string;
+    force?: boolean;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -491,6 +525,83 @@ export async function processTaskIpc(
         }
       } else {
         logger.warn({ data }, 'Invalid or missing send_file params');
+      }
+      break;
+
+    case 'install_skill':
+      if (isMain && data.skillNameOrUrl) {
+        const result = await installSkill(data.skillNameOrUrl, { force: data.force });
+        const response = {
+          ok: result.ok,
+          message: result.ok
+            ? `Skill '${result.skillName || data.skillNameOrUrl}' installed successfully`
+            : result.error || 'Failed to install skill',
+        };
+        writeIpcResponse(sourceGroup, data.taskId, response);
+      } else {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized or invalid install_skill attempt',
+        );
+        writeIpcResponse(sourceGroup, data.taskId, {
+          ok: false,
+          message: 'Unauthorized or missing skillNameOrUrl',
+        });
+      }
+      break;
+
+    case 'remove_skill':
+      if (isMain && data.skillNameOrUrl) {
+        const result = removeSkill(data.skillNameOrUrl);
+        writeIpcResponse(sourceGroup, data.taskId, {
+          ok: result.ok,
+          message: result.ok
+            ? `Skill '${data.skillNameOrUrl}' removed`
+            : result.error || 'Failed to remove skill',
+        });
+      } else {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized or invalid remove_skill attempt',
+        );
+        writeIpcResponse(sourceGroup, data.taskId, {
+          ok: false,
+          message: 'Unauthorized or missing skillNameOrUrl',
+        });
+      }
+      break;
+
+    case 'list_skills':
+      if (isMain) {
+        const skills = listInstalledSkills();
+        writeIpcResponse(sourceGroup, data.taskId, {
+          ok: true,
+          message: `${skills.length} skill(s) installed`,
+          skills,
+        });
+      } else {
+        logger.warn({ sourceGroup }, 'Unauthorized list_skills attempt');
+        writeIpcResponse(sourceGroup, data.taskId, {
+          ok: false,
+          message: 'Unauthorized',
+        });
+      }
+      break;
+
+    case 'list_available_skills':
+      if (isMain) {
+        const skills = await listAvailableSkills();
+        writeIpcResponse(sourceGroup, data.taskId, {
+          ok: true,
+          message: `${skills.length} skill(s) available`,
+          skills,
+        });
+      } else {
+        logger.warn({ sourceGroup }, 'Unauthorized list_available_skills attempt');
+        writeIpcResponse(sourceGroup, data.taskId, {
+          ok: false,
+          message: 'Unauthorized',
+        });
       }
       break;
 

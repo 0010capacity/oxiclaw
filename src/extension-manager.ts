@@ -34,6 +34,7 @@ export const AVAILABLE_EXTENSIONS = [
   'zai-tts',
   'pi-mcp-client',
   'template',
+  'skill-manager',
 ];
 
 /**
