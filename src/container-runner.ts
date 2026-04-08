@@ -1,6 +1,6 @@
 /**
- * Container Runner for NanoClaw
- * Spawns agent execution in containers and handles IPC
+ * Container Runner for OxiClaw
+ * Spawns agent execution in containers and handles IPC via JSON-RPC 2.0
  */
 import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
@@ -13,7 +13,6 @@ import {
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
-  ONECLI_URL,
   TIMEZONE,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
@@ -24,15 +23,34 @@ import {
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
-import { OneCLI } from '@onecli-sh/sdk';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
-const onecli = new OneCLI({ url: ONECLI_URL });
+// JSON-RPC 2.0 protocol types for container IPC
+let rpcRequestId = 0;
+function nextRpcId(): number {
+  return ++rpcRequestId;
+}
 
-// Sentinel markers for robust output parsing (must match agent-runner)
-const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
-const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
+interface JsonRpcRequest {
+  jsonrpc: '2.0';
+  id: number;
+  method: string;
+  params: Record<string, unknown>;
+}
+
+interface JsonRpcResponse {
+  jsonrpc: '2.0';
+  id: number | null;
+  result?: unknown;
+  error?: { code: number; message: string };
+}
+
+interface JsonRpcNotification {
+  jsonrpc: '2.0';
+  method?: string;
+  params?: Record<string, unknown>;
+}
 
 export interface ContainerInput {
   prompt: string;
@@ -43,6 +61,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  images?: string[]; // base64-encoded images for multimodal input
 }
 
 export interface ContainerOutput {
@@ -50,6 +69,7 @@ export interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+  images?: string[]; // base64-encoded images returned by the agent
 }
 
 interface VolumeMount {
@@ -239,33 +259,40 @@ function buildVolumeMounts(
     mounts.push(...validatedMounts);
   }
 
+  // Per-group .pi/agent directory for pi-mono SDK credentials and models
+  // SDK reads auth.json and models.json from getAgentDir() = XDG_CONFIG_HOME/pi/agent
+  const agentDir = path.join(DATA_DIR, 'credentials', group.folder, '.pi', 'agent');
+  const authFile = path.join(agentDir, 'auth.json');
+  const modelsFile = path.join(agentDir, 'models.json');
+  fs.mkdirSync(agentDir, { recursive: true });
+  if (!fs.existsSync(authFile)) {
+    fs.writeFileSync(authFile, '{}', 'utf-8');
+  }
+  if (!fs.existsSync(modelsFile)) {
+    // Create empty models.json so SDK doesn't complain
+    fs.writeFileSync(modelsFile, '{"providers":{}}', 'utf-8');
+  }
+  mounts.push({
+    hostPath: agentDir,
+    containerPath: '/workspace/group/.pi/agent',
+    readonly: false,
+  });
+
   return mounts;
 }
 
 async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
-  agentIdentifier?: string,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // OneCLI gateway handles credential injection — containers never see real secrets.
-  // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
-  const onecliApplied = await onecli.applyContainerConfig(args, {
-    addHostMapping: false, // Nanoclaw already handles host gateway
-    agent: agentIdentifier,
-  });
-  if (onecliApplied) {
-    logger.info({ containerName }, 'OneCLI gateway config applied');
-  } else {
-    logger.warn(
-      { containerName },
-      'OneCLI gateway not reachable — container will have no credentials',
-    );
-  }
+  // pi-mono SDK reads credentials from XDG_CONFIG_HOME/pi/agent/
+  // Point it to the mounted per-group agent directory
+  args.push('-e', 'XDG_CONFIG_HOME=/workspace/group');
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
@@ -306,15 +333,10 @@ export async function runContainerAgent(
 
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
-  const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  // Main group uses the default OneCLI agent; others use their own agent.
-  const agentIdentifier = input.isMain
-    ? undefined
-    : group.folder.toLowerCase().replace(/_/g, '-');
+  const containerName = `oxiclaw-${safeName}-${Date.now()}`;
   const containerArgs = await buildContainerArgs(
     mounts,
     containerName,
-    agentIdentifier,
   );
 
   logger.debug(
@@ -355,13 +377,42 @@ export async function runContainerAgent(
     let stdoutTruncated = false;
     let stderrTruncated = false;
 
-    container.stdin.write(JSON.stringify(input));
+    // JSON-RPC 2.0 IPC: send init request, then prompt request via stdin
+    const initRequest: JsonRpcRequest = {
+      jsonrpc: '2.0',
+      id: nextRpcId(),
+      method: 'init',
+      params: {},
+    };
+    const promptRequest: JsonRpcRequest = {
+      jsonrpc: '2.0',
+      id: nextRpcId(),
+      method: 'prompt',
+      params: {
+        prompt: input.prompt,
+        session_id: input.sessionId || 'default',
+        group_folder: input.groupFolder,
+        chat_jid: input.chatJid,
+        is_main: input.isMain,
+        is_scheduled_task: input.isScheduledTask || false,
+        assistant_name: input.assistantName,
+        script: input.script,
+        images: input.images || [],
+      },
+    };
+
+    // Send init then prompt as line-delimited JSON-RPC
+    container.stdin.write(JSON.stringify(initRequest) + '\n');
+    container.stdin.write(JSON.stringify(promptRequest) + '\n');
     container.stdin.end();
 
-    // Streaming output: parse OUTPUT_START/END marker pairs as they arrive
-    let parseBuffer = '';
+    // Streaming output: parse JSON-RPC 2.0 responses from line-delimited stdout
+    let lineBuffer = '';
     let newSessionId: string | undefined;
     let outputChain = Promise.resolve();
+
+    // Track which RPC IDs we've sent so we can match responses
+    const pendingRpcIds = new Set([initRequest.id, promptRequest.id]);
 
     container.stdout.on('data', (data) => {
       const chunk = data.toString();
@@ -381,36 +432,101 @@ export async function runContainerAgent(
         }
       }
 
-      // Stream-parse for output markers
-      if (onOutput) {
-        parseBuffer += chunk;
-        let startIdx: number;
-        while ((startIdx = parseBuffer.indexOf(OUTPUT_START_MARKER)) !== -1) {
-          const endIdx = parseBuffer.indexOf(OUTPUT_END_MARKER, startIdx);
-          if (endIdx === -1) break; // Incomplete pair, wait for more data
+      // Stream-parse JSON-RPC responses (line-delimited)
+      lineBuffer += chunk;
+      const lines = lineBuffer.split('\n');
+      // Keep the last (potentially incomplete) line in the buffer
+      lineBuffer = lines.pop() || '';
 
-          const jsonStr = parseBuffer
-            .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
-            .trim();
-          parseBuffer = parseBuffer.slice(endIdx + OUTPUT_END_MARKER.length);
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
 
-          try {
-            const parsed: ContainerOutput = JSON.parse(jsonStr);
-            if (parsed.newSessionId) {
-              newSessionId = parsed.newSessionId;
+        try {
+          const msg = JSON.parse(trimmed) as JsonRpcResponse | JsonRpcNotification;
+
+          // Check if this is a JSON-RPC response (has an id)
+          if ('id' in msg && msg.id != null && pendingRpcIds.has(msg.id as number)) {
+            // Handle init response — extract session_id
+            if (msg.id === initRequest.id) {
+              const result = msg.result as { session_id?: string } | undefined;
+              if (result?.session_id) {
+                newSessionId = result.session_id;
+              }
+              if (msg.error) {
+                logger.error(
+                  { group: group.name, error: msg.error },
+                  'Container init RPC failed',
+                );
+              } else {
+                logger.debug(
+                  { group: group.name, sessionId: newSessionId },
+                  'Container init RPC succeeded',
+                );
+              }
+              pendingRpcIds.delete(msg.id as number);
+              continue;
             }
-            hadStreamingOutput = true;
-            // Activity detected — reset the hard timeout
-            resetTimeout();
-            // Call onOutput for all markers (including null results)
-            // so idle timers start even for "silent" query completions.
-            outputChain = outputChain.then(() => onOutput(parsed));
-          } catch (err) {
-            logger.warn(
-              { group: group.name, error: err },
-              'Failed to parse streamed output chunk',
-            );
+
+            // Handle prompt response — this is the main output
+            if (msg.id === promptRequest.id) {
+              if (msg.error) {
+                const output: ContainerOutput = {
+                  status: 'error',
+                  result: null,
+                  error: msg.error.message,
+                };
+                hadStreamingOutput = true;
+                resetTimeout();
+                if (onOutput) {
+                  outputChain = outputChain.then(() => onOutput(output));
+                }
+              } else {
+                const result = msg.result as {
+                  session_id?: string;
+                  content?: string;
+                  tool_calls?: Array<{ name: string; params: Record<string, unknown> }>;
+                  images?: string[];
+                } | undefined;
+
+                if (result?.session_id) {
+                  newSessionId = result.session_id;
+                }
+
+                const output: ContainerOutput = {
+                  status: 'success',
+                  result: result?.content || null,
+                  newSessionId: result?.session_id,
+                  images: result?.images,
+                };
+                hadStreamingOutput = true;
+                resetTimeout();
+                if (onOutput) {
+                  outputChain = outputChain.then(() => onOutput(output));
+                }
+              }
+              pendingRpcIds.delete(msg.id as number);
+              continue;
+            }
           }
+
+          // JSON-RPC notification (no id, or id not in pending set)
+          // These are streaming events (e.g. session events from the agent)
+          // Activity detected — reset the hard timeout
+          hadStreamingOutput = true;
+          resetTimeout();
+          logger.debug(
+            { group: group.name, notification: msg },
+            'Container notification received',
+          );
+        } catch (err) {
+          // Not valid JSON — could be debug output from the container.
+          // Only warn in verbose mode; non-JSON stdout lines are expected
+          // from the agent-runner's stderr logging that sometimes bleeds through.
+          logger.debug(
+            { group: group.name, line: trimmed.slice(0, 200), error: err },
+            'Non-JSON line on container stdout',
+          );
         }
       }
     });
@@ -422,7 +538,7 @@ export async function runContainerAgent(
         if (line) logger.debug({ container: group.folder }, line);
       }
       // Don't reset timeout on stderr — SDK writes debug logs continuously.
-      // Timeout only resets on actual output (OUTPUT_MARKER in stdout).
+      // Timeout only resets on actual JSON-RPC responses in stdout.
       if (stderrTruncated) return;
       const remaining = CONTAINER_MAX_OUTPUT_SIZE - stderr.length;
       if (chunk.length > remaining) {
@@ -625,24 +741,50 @@ export async function runContainerAgent(
         return;
       }
 
-      // Legacy mode: parse the last output marker pair from accumulated stdout
+      // Non-streaming mode: parse the JSON-RPC prompt response from accumulated stdout
       try {
-        // Extract JSON between sentinel markers for robust parsing
-        const startIdx = stdout.indexOf(OUTPUT_START_MARKER);
-        const endIdx = stdout.indexOf(OUTPUT_END_MARKER);
+        // Parse line-delimited JSON-RPC responses from stdout
+        const lines = stdout.trim().split('\n').filter(Boolean);
+        let promptResponse: JsonRpcResponse | undefined;
 
-        let jsonLine: string;
-        if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-          jsonLine = stdout
-            .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
-            .trim();
-        } else {
-          // Fallback: last non-empty line (backwards compatibility)
-          const lines = stdout.trim().split('\n');
-          jsonLine = lines[lines.length - 1];
+        for (const line of lines) {
+          try {
+            const msg = JSON.parse(line.trim()) as JsonRpcResponse;
+            // Find the prompt response by matching the prompt request ID
+            if ('id' in msg && msg.id === promptRequest.id) {
+              promptResponse = msg;
+            }
+          } catch {
+            // Skip non-JSON lines
+          }
         }
 
-        const output: ContainerOutput = JSON.parse(jsonLine);
+        if (!promptResponse) {
+          throw new Error('No JSON-RPC prompt response found in container output');
+        }
+
+        if (promptResponse.error) {
+          resolve({
+            status: 'error',
+            result: null,
+            error: promptResponse.error.message,
+          });
+          return;
+        }
+
+        const result = promptResponse.result as {
+          session_id?: string;
+          content?: string;
+          tool_calls?: Array<{ name: string; params: Record<string, unknown> }>;
+          images?: string[];
+        } | undefined;
+
+        const output: ContainerOutput = {
+          status: 'success',
+          result: result?.content || null,
+          newSessionId: result?.session_id,
+          images: result?.images,
+        };
 
         logger.info(
           {

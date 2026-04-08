@@ -1,8 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 
-import { OneCLI } from '@onecli-sh/sdk';
-
 import {
   ASSISTANT_NAME,
   DEFAULT_TRIGGER,
@@ -10,7 +8,6 @@ import {
   GROUPS_DIR,
   IDLE_TIMEOUT,
   MAX_MESSAGES_PER_PROMPT,
-  ONECLI_URL,
   POLL_INTERVAL,
   TIMEZONE,
 } from './config.js';
@@ -19,6 +16,7 @@ import {
   getChannelFactory,
   getRegisteredChannelNames,
 } from './channels/registry.js';
+import { getSwarmRouter } from './channels/telegram/bot.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -61,7 +59,9 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import { startHealthChecker } from './health-checker.js';
 import { startSessionCleanup } from './session-cleanup.js';
+import { discoverAgents } from './agent-manager.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -77,27 +77,6 @@ let messageLoopRunning = false;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
-
-const onecli = new OneCLI({ url: ONECLI_URL });
-
-function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
-  if (group.isMain) return;
-  const identifier = group.folder.toLowerCase().replace(/_/g, '-');
-  onecli.ensureAgent({ name: group.name, identifier }).then(
-    (res) => {
-      logger.info(
-        { jid, identifier, created: res.created },
-        'OneCLI agent ensured',
-      );
-    },
-    (err) => {
-      logger.debug(
-        { jid, identifier, err: String(err) },
-        'OneCLI agent ensure skipped',
-      );
-    },
-  );
-}
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
@@ -179,9 +158,6 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
       logger.info({ folder: group.folder }, 'Created CLAUDE.md from template');
     }
   }
-
-  // Ensure a corresponding OneCLI agent exists (best-effort, non-blocking)
-  ensureOneCLIAgent(jid, group);
 
   logger.info(
     { jid, name: group.name, folder: group.folder },
@@ -445,7 +421,7 @@ async function startMessageLoop(): Promise<void> {
   }
   messageLoopRunning = true;
 
-  logger.info(`NanoClaw running (default trigger: ${DEFAULT_TRIGGER})`);
+  logger.info(`OxiClaw running (default trigger: ${DEFAULT_TRIGGER})`);
 
   while (true) {
     try {
@@ -574,13 +550,10 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   loadState();
 
-  // Ensure OneCLI agents exist for all registered groups.
-  // Recovers from missed creates (e.g. OneCLI was down at registration time).
-  for (const [jid, group] of Object.entries(registeredGroups)) {
-    ensureOneCLIAgent(jid, group);
-  }
-
   restoreRemoteControl();
+
+  // Discover existing agents from disk at startup
+  discoverAgents();
 
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
@@ -718,6 +691,11 @@ async function main(): Promise<void> {
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       return channel.sendMessage(jid, text);
     },
+    sendFile: (jid, filePath, caption) => {
+      const channel = findChannel(channels, jid);
+      if (!channel?.sendFile) throw new Error(`Channel does not support sendFile`);
+      return channel.sendFile(jid, filePath, caption);
+    },
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroups: async (force: boolean) => {
@@ -748,8 +726,25 @@ async function main(): Promise<void> {
     },
   });
   startSessionCleanup();
+  startHealthChecker();
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
+
+  // Register SwarmRouter onRoute handler for agent mention routing
+  const swarmRouter = getSwarmRouter();
+  if (swarmRouter) {
+    swarmRouter.onRoute(async (msg) => {
+      logger.info(
+        { agentName: msg.agentName, chatJid: msg.chatJid, isAll: msg.isAllMention },
+        'SwarmRouter routing message to pi-mono container via IPC',
+      );
+      // Route the message to the appropriate agent container via IPC.
+      // The IPC watcher handles task files in DATA_DIR/ipc/{groupFolder}/tasks/.
+      // TODO: implement JSON-RPC prompt writing and response waiting for agent routing
+    });
+  } else {
+    logger.debug('SwarmRouter not initialized yet (Telegram channel may not be connected)');
+  }
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');
     process.exit(1);
@@ -764,7 +759,7 @@ const isDirectRun =
 
 if (isDirectRun) {
   main().catch((err) => {
-    logger.error({ err }, 'Failed to start NanoClaw');
+    logger.error({ err }, 'Failed to start OxiClaw');
     process.exit(1);
   });
 }

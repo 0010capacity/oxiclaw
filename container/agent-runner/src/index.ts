@@ -53,20 +53,25 @@ function respond(id: string | number | null, result?: unknown, error?: { code: n
 interface PromptResult {
   content: string;
   toolCalls: Array<{ name: string; params: Record<string, unknown> }>;
+  images?: string[];
 }
 
 async function handlePromptRequest(params: Record<string, unknown>): Promise<PromptResult> {
-  const { prompt } = params as { prompt: string };
+  const { prompt, images } = params as { prompt: string; images?: string[] };
 
   if (!currentSession) {
     throw new Error('No active session. Initialize session first.');
   }
 
-  log(`Processing prompt (${prompt.length} chars)`);
+  log(`Processing prompt (${prompt.length} chars, images: ${images?.length || 0})`);
 
   // Collect result from agent_end event
   let finalContent = '';
   const toolCalls: Array<{ name: string; params: Record<string, unknown> }> = [];
+  const responseImages: string[] = [];
+
+  // Content block type for image responses
+  interface ContentBlock { type: string; text?: string; url?: string; [key: string]: unknown }
 
   const eventUnsubscribe = currentSession.subscribe((event) => {
     // Forward session events to orchestrator via IPC
@@ -74,24 +79,32 @@ async function handlePromptRequest(params: Record<string, unknown>): Promise<Pro
 
     // Capture final result from agent_end
     if (event.type === 'agent_end') {
-      const endEvent = event as { type: 'agent_end'; messages: Array<{ content?: string; tool_calls?: Array<{ name: string; params: Record<string, unknown> }> }> };
-      finalContent = (endEvent.messages[endEvent.messages.length - 1] as { content?: string })?.content || '';
+      const endEvent = event as { type: 'agent_end'; messages: Array<ContentBlock & { content?: string; tool_calls?: Array<{ name: string; params: Record<string, unknown> }> }> };
+      finalContent = (endEvent.messages[endEvent.messages.length - 1] as ContentBlock & { content?: string })?.content || '';
       for (const msg of endEvent.messages) {
         if (msg.tool_calls) {
           toolCalls.push(...msg.tool_calls);
+        }
+        // Extract image content blocks
+        if (msg.type === 'image' && msg.url) {
+          responseImages.push(msg.url as string);
+        }
+        // Also check top-level content for image URLs (some models format differently)
+        if (typeof msg.content === 'string' && msg.content.startsWith('data:image/')) {
+          responseImages.push(msg.content);
         }
       }
     }
   });
 
   try {
-    await currentSession.prompt(prompt);
+    await currentSession.prompt(prompt, { images: images || [] });
   } finally {
     eventUnsubscribe();
   }
 
-  log(`Prompt complete, response: ${finalContent.length} chars, tools: ${toolCalls.length}`);
-  return { content: finalContent, toolCalls };
+  log(`Prompt complete, response: ${finalContent.length} chars, tools: ${toolCalls.length}, images: ${responseImages.length}`);
+  return { content: finalContent, toolCalls, images: responseImages.length > 0 ? responseImages : undefined };
 }
 
 async function handleInitRequest(_params: Record<string, unknown>): Promise<void> {
@@ -106,6 +119,8 @@ async function handleInitRequest(_params: Record<string, unknown>): Promise<void
   const tools = createCodingTools(CWD) as any;
 
   // Create agent session with pi-mono SDK
+  // SDK reads credentials from ~/.pi/agent/auth.json and models from ~/.pi/agent/models.json
+  // These are mounted by the orchestrator before container start
   const { session } = await createAgentSession({
     cwd: CWD,
     tools,
@@ -162,6 +177,7 @@ async function handleStdinRequest(req: StdinRequest): Promise<void> {
           session_id: SESSION_ID,
           content: result.content,
           tool_calls: result.toolCalls,
+          images: result.images,
         });
         break;
       }
