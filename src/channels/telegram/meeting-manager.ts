@@ -92,8 +92,8 @@ export interface Meeting {
 export interface MeetingManagerDeps {
   /** Send a message to a chat. */
   sendMessage: (chatJid: string, text: string) => Promise<void>;
-  /** Send a prompt to a specific agent session. */
-  promptAgent: (
+  /** Send a prompt to a specific agent session (optional — meeting responses can arrive via orchestrator message flow). */
+  promptAgent?: (
     chatJid: string,
     agentName: string,
     prompt: string,
@@ -217,7 +217,11 @@ export class MeetingManager extends EventEmitter {
 
     // Guard: already a meeting in progress
     const existing = this.meetings.get(chatJid);
-    if (existing && existing.state !== 'completed' && existing.state !== 'cancelled') {
+    if (
+      existing &&
+      existing.state !== 'completed' &&
+      existing.state !== 'cancelled'
+    ) {
       throw new Error(
         `A meeting is already in progress for this group (state: ${existing.state})`,
       );
@@ -360,7 +364,10 @@ export class MeetingManager extends EventEmitter {
   // State machine transitions
   // -------------------------------------------------------------------------
 
-  private async transition(chatJid: string, newState: MeetingState): Promise<void> {
+  private async transition(
+    chatJid: string,
+    newState: MeetingState,
+  ): Promise<void> {
     const meeting = this.meetings.get(chatJid);
     if (!meeting) {
       logger.error({ chatJid }, 'No meeting found for state transition');
@@ -375,7 +382,12 @@ export class MeetingManager extends EventEmitter {
       'Meeting state transition',
     );
 
-    this.emit('stateChange', { chatJid, meetingId: meeting.id, oldState, newState });
+    this.emit('stateChange', {
+      chatJid,
+      meetingId: meeting.id,
+      oldState,
+      newState,
+    });
 
     switch (newState) {
       case 'in_progress':
@@ -403,14 +415,18 @@ export class MeetingManager extends EventEmitter {
     }
 
     // Prompt the moderator to present the agenda
-    await this.promptAgent(chatJid, meeting.moderator, [
-      `[SYSTEM] Meeting started. You are the Moderator.`,
-      `Agenda: "${meeting.agenda}"`,
-      `Participants: ${meeting.participants.map((p) => `@agent_${p}`).join(', ')}`,
-      '',
-      `Present the agenda to the group and invite discussion.`,
-      `Keep your response concise (2-3 sentences max).`,
-    ].join('\n'));
+    await this.promptAgent(
+      chatJid,
+      meeting.moderator,
+      [
+        `[SYSTEM] Meeting started. You are the Moderator.`,
+        `Agenda: "${meeting.agenda}"`,
+        `Participants: ${meeting.participants.map((p) => `@agent_${p}`).join(', ')}`,
+        '',
+        `Present the agenda to the group and invite discussion.`,
+        `Keep your response concise (2-3 sentences max).`,
+      ].join('\n'),
+    );
   }
 
   private async onSummarizing(chatJid: string): Promise<void> {
@@ -425,19 +441,23 @@ export class MeetingManager extends EventEmitter {
       })
       .join('\n');
 
-    await this.promptAgent(chatJid, meeting.moderator, [
-      `[SYSTEM] Meeting concluded. Please summarize the discussion.`,
-      '',
-      `Agenda: "${meeting.agenda}"`,
-      '',
-      `Discussion transcript:`,
-      transcript,
-      '',
-      `Provide a concise summary with:`,
-      `1. Key points discussed`,
-      `2. Decisions made`,
-      `3. Action items (if any)`,
-    ].join('\n'));
+    await this.promptAgent(
+      chatJid,
+      meeting.moderator,
+      [
+        `[SYSTEM] Meeting concluded. Please summarize the discussion.`,
+        '',
+        `Agenda: "${meeting.agenda}"`,
+        '',
+        `Discussion transcript:`,
+        transcript,
+        '',
+        `Provide a concise summary with:`,
+        `1. Key points discussed`,
+        `2. Decisions made`,
+        `3. Action items (if any)`,
+      ].join('\n'),
+    );
 
     // Transition to completed after summary is generated
     // The orchestrator will call processAgentResponse which will
@@ -483,7 +503,11 @@ export class MeetingManager extends EventEmitter {
     // Save meeting log
     this.saveMeetingLog(meeting);
 
-    this.emit('meetingCompleted', { chatJid, meetingId: meeting.id, summary: meeting.summary });
+    this.emit('meetingCompleted', {
+      chatJid,
+      meetingId: meeting.id,
+      summary: meeting.summary,
+    });
 
     logger.info(
       { chatJid, meetingId: meeting.id, turns: meeting.turns },
@@ -547,8 +571,8 @@ export class MeetingManager extends EventEmitter {
     if (!meeting || meeting.state !== 'in_progress') return;
 
     // Find agents that can still speak
-    const eligible = meeting.participants.filter(
-      (name) => this.canSpeak(chatJid, name),
+    const eligible = meeting.participants.filter((name) =>
+      this.canSpeak(chatJid, name),
     );
 
     if (eligible.length === 0) {
@@ -612,7 +636,11 @@ export class MeetingManager extends EventEmitter {
 
     if (this.deps?.promptAgent) {
       try {
-        const response = await this.deps.promptAgent(chatJid, agentName, prompt);
+        const response = await this.deps.promptAgent(
+          chatJid,
+          agentName,
+          prompt,
+        );
 
         // Record the turn
         if (response) {

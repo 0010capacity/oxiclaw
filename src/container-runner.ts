@@ -154,14 +154,9 @@ function buildVolumeMounts(
     }
   }
 
-  // Per-group Claude sessions directory (isolated from other groups)
-  // Each group gets their own .claude/ to prevent cross-group session access
-  const groupSessionsDir = path.join(
-    DATA_DIR,
-    'sessions',
-    group.folder,
-    '.claude',
-  );
+  // Per-group pi-mono sessions directory (isolated from other groups)
+  // Each group gets their own .pi/ to prevent cross-group session access
+  const groupSessionsDir = path.join(DATA_DIR, 'sessions', group.folder, '.pi');
   fs.mkdirSync(groupSessionsDir, { recursive: true });
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
@@ -169,16 +164,10 @@ function buildVolumeMounts(
       settingsFile,
       JSON.stringify(
         {
+          customTools: ['/workspace/group/extensions'],
           env: {
-            // Enable agent swarms (subagent orchestration)
-            // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
-            CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-            // Load CLAUDE.md from additional mounted directories
-            // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
-            CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-            // Enable Claude's memory feature (persists user preferences between sessions)
-            // https://code.claude.com/docs/en/memory#manage-auto-memory
-            CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
+            // pi-mono SDK settings
+            PI_ENABLE_AUTO_MEMORY: '1',
           },
         },
         null,
@@ -187,7 +176,7 @@ function buildVolumeMounts(
     );
   }
 
-  // Sync skills from container/skills/ into each group's .claude/skills/
+  // Sync skills from container/skills/ into each group's .pi/skills/
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
   if (fs.existsSync(skillsSrc)) {
@@ -200,7 +189,7 @@ function buildVolumeMounts(
   }
   mounts.push({
     hostPath: groupSessionsDir,
-    containerPath: '/home/node/.claude',
+    containerPath: '/home/node/.pi',
     readonly: false,
   });
 
@@ -261,7 +250,13 @@ function buildVolumeMounts(
 
   // Per-group .pi/agent directory for pi-mono SDK credentials and models
   // SDK reads auth.json and models.json from getAgentDir() = XDG_CONFIG_HOME/pi/agent
-  const agentDir = path.join(DATA_DIR, 'credentials', group.folder, '.pi', 'agent');
+  const agentDir = path.join(
+    DATA_DIR,
+    'credentials',
+    group.folder,
+    '.pi',
+    'agent',
+  );
   const authFile = path.join(agentDir, 'auth.json');
   const modelsFile = path.join(agentDir, 'models.json');
   fs.mkdirSync(agentDir, { recursive: true });
@@ -274,7 +269,7 @@ function buildVolumeMounts(
   }
   mounts.push({
     hostPath: agentDir,
-    containerPath: '/workspace/group/.pi/agent',
+    containerPath: '/workspace/group/pi/agent',
     readonly: false,
   });
 
@@ -334,10 +329,7 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `oxiclaw-${safeName}-${Date.now()}`;
-  const containerArgs = await buildContainerArgs(
-    mounts,
-    containerName,
-  );
+  const containerArgs = await buildContainerArgs(mounts, containerName);
 
   logger.debug(
     {
@@ -443,10 +435,16 @@ export async function runContainerAgent(
         if (!trimmed) continue;
 
         try {
-          const msg = JSON.parse(trimmed) as JsonRpcResponse | JsonRpcNotification;
+          const msg = JSON.parse(trimmed) as
+            | JsonRpcResponse
+            | JsonRpcNotification;
 
           // Check if this is a JSON-RPC response (has an id)
-          if ('id' in msg && msg.id != null && pendingRpcIds.has(msg.id as number)) {
+          if (
+            'id' in msg &&
+            msg.id != null &&
+            pendingRpcIds.has(msg.id as number)
+          ) {
             // Handle init response — extract session_id
             if (msg.id === initRequest.id) {
               const result = msg.result as { session_id?: string } | undefined;
@@ -482,12 +480,17 @@ export async function runContainerAgent(
                   outputChain = outputChain.then(() => onOutput(output));
                 }
               } else {
-                const result = msg.result as {
-                  session_id?: string;
-                  content?: string;
-                  tool_calls?: Array<{ name: string; params: Record<string, unknown> }>;
-                  images?: string[];
-                } | undefined;
+                const result = msg.result as
+                  | {
+                      session_id?: string;
+                      content?: string;
+                      tool_calls?: Array<{
+                        name: string;
+                        params: Record<string, unknown>;
+                      }>;
+                      images?: string[];
+                    }
+                  | undefined;
 
                 if (result?.session_id) {
                   newSessionId = result.session_id;
@@ -760,7 +763,9 @@ export async function runContainerAgent(
         }
 
         if (!promptResponse) {
-          throw new Error('No JSON-RPC prompt response found in container output');
+          throw new Error(
+            'No JSON-RPC prompt response found in container output',
+          );
         }
 
         if (promptResponse.error) {
@@ -772,12 +777,17 @@ export async function runContainerAgent(
           return;
         }
 
-        const result = promptResponse.result as {
-          session_id?: string;
-          content?: string;
-          tool_calls?: Array<{ name: string; params: Record<string, unknown> }>;
-          images?: string[];
-        } | undefined;
+        const result = promptResponse.result as
+          | {
+              session_id?: string;
+              content?: string;
+              tool_calls?: Array<{
+                name: string;
+                params: Record<string, unknown>;
+              }>;
+              images?: string[];
+            }
+          | undefined;
 
         const output: ContainerOutput = {
           status: 'success',

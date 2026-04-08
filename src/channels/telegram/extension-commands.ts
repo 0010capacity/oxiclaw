@@ -1,5 +1,6 @@
 import type { Telegraf, Context } from 'telegraf';
 import type { Update } from '@telegraf/types';
+import type { RegisteredGroup } from '../../types.js';
 import {
   listExtensions,
   addExtension,
@@ -18,6 +19,7 @@ import {
  */
 export function registerExtensionCommands(
   bot: Telegraf<Context<Update>>,
+  registeredGroups: () => Record<string, RegisteredGroup>,
 ): void {
   bot.command('extension', async (ctx: Context<Update>) => {
     const text =
@@ -45,7 +47,11 @@ export function registerExtensionCommands(
     try {
       if (subcommand === 'list') {
         const extensions = listExtensions();
-        const groupExtensions = listExtensions(chatId);
+        // Look up group.folder from registeredGroups to list extensions
+        // from the correct group directory (not the Telegram JID)
+        const groups = registeredGroups();
+        const group = groups[chatId];
+        const groupExtensions = group ? listExtensions(group.folder) : [];
 
         let message = `<b>Available Extensions</b>\n\n`;
         message += `<b>Global:</b>\n`;
@@ -69,13 +75,29 @@ export function registerExtensionCommands(
           return;
         }
 
-        addExtension(chatId, name);
+        // Look up group.folder from registeredGroups to ensure extensions
+        // are stored in the correct group directory (not the Telegram JID)
+        const groups = registeredGroups();
+        const group = groups[chatId];
+        if (!group) {
+          await ctx.reply(`Group not registered: ${chatId}`);
+          return;
+        }
+        addExtension(group.folder, name);
         await ctx.reply(
           `✅ Extension <code>${name}</code> added. Container restarting...`,
           { parse_mode: 'HTML' },
         );
       } else if (subcommand === 'remove' && name) {
-        removeExtension(chatId, name);
+        // Look up group.folder from registeredGroups to ensure extensions
+        // are removed from the correct group directory (not the Telegram JID)
+        const groups = registeredGroups();
+        const group = groups[chatId];
+        if (!group) {
+          await ctx.reply(`Group not registered: ${chatId}`);
+          return;
+        }
+        removeExtension(group.folder, name);
         await ctx.reply(
           `🗑 Extension <code>${name}</code> removed. Container restarting...`,
           { parse_mode: 'HTML' },

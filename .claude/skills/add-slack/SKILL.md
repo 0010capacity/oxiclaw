@@ -5,7 +5,7 @@ description: Add Slack as a channel. Can replace WhatsApp entirely or run alongs
 
 # Add Slack Channel
 
-This skill adds Slack support to NanoClaw, then walks through interactive setup.
+This skill adds Slack support to OxiClaw, then walks through interactive setup.
 
 ## Phase 1: Pre-flight
 
@@ -28,7 +28,7 @@ git remote -v
 If `slack` is missing, add it:
 
 ```bash
-git remote add slack https://github.com/qwibitai/nanoclaw-slack.git
+git remote add slack https://github.com/qwibitai/oxiclaw-slack.git
 ```
 
 ### Merge the skill branch
@@ -99,7 +99,7 @@ The container reads environment from `data/env/env`, not `.env` directly.
 
 ```bash
 npm run build
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+launchctl kickstart -k gui/$(id -u)/com.oxiclaw
 ```
 
 ## Phase 4: Registration
@@ -147,7 +147,7 @@ Tell the user:
 ### Check logs if needed
 
 ```bash
-tail -f logs/nanoclaw.log
+tail -f logs/oxiclaw.log
 ```
 
 ## Troubleshooting
@@ -157,7 +157,7 @@ tail -f logs/nanoclaw.log
 1. Check `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` are set in `.env` AND synced to `data/env/env`
 2. Check channel is registered: `sqlite3 store/messages.db "SELECT * FROM registered_groups WHERE jid LIKE 'slack:%'"`
 3. For non-main channels: message must include trigger pattern
-4. Service is running: `launchctl list | grep nanoclaw`
+4. Service is running: `launchctl list | grep oxiclaw`
 
 ### Bot connected but not receiving messages
 
@@ -180,7 +180,7 @@ If the bot logs `missing_scope` errors:
 3. **Reinstall the app** to your workspace — scope changes require reinstallation
 4. Copy the new Bot Token (it changes on reinstall) and update `.env`
 5. Sync: `mkdir -p data/env && cp .env data/env/env`
-6. Restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw`
+6. Restart: `launchctl kickstart -k gui/$(id -u)/com.oxiclaw`
 
 ### Getting channel ID
 

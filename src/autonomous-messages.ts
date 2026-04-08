@@ -94,10 +94,10 @@ const PROACTIVE_KEYWORDS = [
   'requires review',
   'please check',
   'action required',
-  '더 논의',          // Korean: more discussion
-  '논의 필요',        // Korean: discussion needed
-  '추가 확인',        // Korean: additional confirmation
-  '계속 진행',        // Korean: continue
+  '더 논의', // Korean: more discussion
+  '논의 필요', // Korean: discussion needed
+  '추가 확인', // Korean: additional confirmation
+  '계속 진행', // Korean: continue
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -363,7 +363,8 @@ export class AutonomousMessageManager extends EventEmitter {
    * Simple substring matching — more sophisticated NLP could be added later.
    */
   private topicsOverlap(topic1: string, topic2: string): boolean {
-    const normalize = (t: string) => t.toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
+    const normalize = (t: string) =>
+      t.toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
     const a = normalize(topic1);
     const b = normalize(topic2);
 
@@ -465,7 +466,10 @@ export class AutonomousMessageManager extends EventEmitter {
       try {
         await this.executeRule(rule.id);
       } catch (err) {
-        logger.error({ err, ruleId: rule.id }, 'Scheduled rule execution failed');
+        logger.error(
+          { err, ruleId: rule.id },
+          'Scheduled rule execution failed',
+        );
       }
     }, safeInterval);
 
@@ -496,12 +500,18 @@ export class AutonomousMessageManager extends EventEmitter {
     const unit = match[2];
 
     switch (unit) {
-      case 'ms': return value;
-      case 's': return value * 1000;
-      case 'm': return value * 60 * 1000;
-      case 'h': return value * 60 * 60 * 1000;
-      case 'd': return value * 24 * 60 * 60 * 1000;
-      default: return null;
+      case 'ms':
+        return value;
+      case 's':
+        return value * 1000;
+      case 'm':
+        return value * 60 * 1000;
+      case 'h':
+        return value * 60 * 60 * 1000;
+      case 'd':
+        return value * 24 * 60 * 60 * 1000;
+      default:
+        return null;
     }
   }
 
@@ -585,9 +595,12 @@ export function initAutonomousMessages(
   autonomousManager = new AutonomousMessageManager(deps);
 
   // Periodic cleanup every hour
-  setInterval(() => {
-    autonomousManager?.cleanup();
-  }, 60 * 60 * 1000);
+  setInterval(
+    () => {
+      autonomousManager?.cleanup();
+    },
+    60 * 60 * 1000,
+  );
 
   return autonomousManager;
 }

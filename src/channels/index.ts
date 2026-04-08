@@ -8,5 +8,6 @@
 // slack
 
 // telegram
+import './telegram/bot.js';
 
 // whatsapp

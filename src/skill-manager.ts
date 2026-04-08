@@ -54,7 +54,10 @@ async function fetchRegistry(url: string): Promise<RegistryIndex | null> {
   try {
     const response = await fetch(url);
     if (!response.ok) {
-      logger.warn({ status: response.status }, 'Failed to fetch remote registry');
+      logger.warn(
+        { status: response.status },
+        'Failed to fetch remote registry',
+      );
       return null;
     }
     const data = await response.json();
@@ -70,7 +73,9 @@ async function loadLocalRegistry(): Promise<RegistryIndex | null> {
     return null;
   }
   try {
-    return JSON.parse(fs.readFileSync(LOCAL_REGISTRY, 'utf-8')) as RegistryIndex;
+    return JSON.parse(
+      fs.readFileSync(LOCAL_REGISTRY, 'utf-8'),
+    ) as RegistryIndex;
   } catch (err) {
     logger.warn({ err }, 'Failed to parse local registry');
     return null;
@@ -261,7 +266,10 @@ export async function installSkill(
 
   const targetDir = path.join(skillsDir, skillName);
   if (fs.existsSync(targetDir) && !options?.force) {
-    return { ok: false, error: `Skill '${skillName}' is already installed. Use --force to reinstall.` };
+    return {
+      ok: false,
+      error: `Skill '${skillName}' is already installed. Use --force to reinstall.`,
+    };
   }
 
   // Remove existing installation if force
@@ -334,9 +342,7 @@ export async function installSkill(
 /**
  * Remove a skill from container/skills/.
  */
-export function removeSkill(
-  name: string,
-): { ok: boolean; error?: string } {
+export function removeSkill(name: string): { ok: boolean; error?: string } {
   const skillsDir = getInstalledSkillsDir();
   const targetDir = path.join(skillsDir, name);
 
@@ -358,14 +364,15 @@ export function removeSkill(
 /**
  * Format installed skills as a readable string for display.
  */
-export function formatInstalledSkillsList(skills: InstalledSkillInfo[]): string {
+export function formatInstalledSkillsList(
+  skills: InstalledSkillInfo[],
+): string {
   if (skills.length === 0) {
     return 'No skills installed.';
   }
 
   const lines = skills.map(
-    (s) =>
-      `• ${s.name} v${s.version} — ${s.description} [${s.category}]`,
+    (s) => `• ${s.name} v${s.version} — ${s.description} [${s.category}]`,
   );
   return ['Installed Skills:', ...lines].join('\n');
 }

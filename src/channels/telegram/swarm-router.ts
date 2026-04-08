@@ -366,7 +366,10 @@ export class SwarmRouter {
     const chatId = chatJid.replace(/^tg:/, '');
 
     try {
-      const options: { parse_mode?: ParseMode; reply_parameters?: { message_id: number } } = {};
+      const options: {
+        parse_mode?: ParseMode;
+        reply_parameters?: { message_id: number };
+      } = {};
       if (replyToMessageId) {
         options.reply_parameters = { message_id: replyToMessageId };
       }

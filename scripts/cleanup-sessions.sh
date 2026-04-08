@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Prune stale session artifacts (JSONLs, debug logs, todos, telemetry, group logs).
-# Safe to run while NanoClaw is live — active sessions are read from the DB.
+# Safe to run while OxiClaw is live — active sessions are read from the DB.
 #
 # Usage:  ./scripts/cleanup-sessions.sh [--dry-run]
 #
@@ -69,7 +69,7 @@ is_active() {
 
 for group_dir in "$SESSIONS_DIR"/*/; do
   [ -d "$group_dir" ] || continue
-  jsonl_dir="$group_dir/.claude/projects/-workspace-group"
+  jsonl_dir="$group_dir/.pi/projects/-workspace-group"
   [ -d "$jsonl_dir" ] || continue
 
   for jsonl in "$jsonl_dir"/*.jsonl; do
@@ -93,7 +93,7 @@ done
 # --- Prune debug logs (>3 days, skip files named after active sessions) ---
 
 for group_dir in "$SESSIONS_DIR"/*/; do
-  debug_dir="$group_dir/.claude/debug"
+  debug_dir="$group_dir/.pi/debug"
   [ -d "$debug_dir" ] || continue
   while IFS= read -r -d '' f; do
     fname=$(basename "$f" .txt)
@@ -105,7 +105,7 @@ done
 # --- Prune todo files (>3 days, skip files named after active sessions) ---
 
 for group_dir in "$SESSIONS_DIR"/*/; do
-  todos_dir="$group_dir/.claude/todos"
+  todos_dir="$group_dir/.pi/todos"
   [ -d "$todos_dir" ] || continue
   while IFS= read -r -d '' f; do
     fname=$(basename "$f" .json)
@@ -122,7 +122,7 @@ done
 # --- Prune telemetry (>7 days, skip files named after active sessions) ---
 
 for group_dir in "$SESSIONS_DIR"/*/; do
-  telem_dir="$group_dir/.claude/telemetry"
+  telem_dir="$group_dir/.pi/telemetry"
   [ -d "$telem_dir" ] || continue
   while IFS= read -r -d '' f; do
     fname=$(basename "$f")

@@ -30,6 +30,7 @@ import { logger } from '../../logger.js';
 import { ASSISTANT_NAME, GROUPS_DIR } from '../../config.js';
 import { registerExtensionCommands } from './extension-commands.js';
 import { SwarmRouter } from './swarm-router.js';
+import { MeetingManager } from './meeting-manager.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -140,6 +141,20 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
       await bot!.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
     },
     registeredGroups,
+  });
+
+  // Initialize the meeting manager so /meeting command works
+  MeetingManager.initialize({
+    sendMessage: async (jid: string, text: string) => {
+      if (!isTelegramJid(jid)) {
+        logger.warn({ jid }, 'Cannot send Telegram message to non-TG JID');
+        return;
+      }
+      const chatId = extractChatId(jid);
+      await bot!.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
+    },
+    // promptAgent is optional — meeting responses are processed via
+    // the orchestrator's normal message flow (processGroupMessages).
   });
 
   // -------------------------------------------------------------------------
@@ -297,7 +312,7 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
   });
 
   // /extension commands — manage pi Extensions
-  registerExtensionCommands(bot);
+  registerExtensionCommands(bot, registeredGroups);
 
   // Register bot commands with Telegram
   bot.telegram

@@ -8,22 +8,20 @@ Single Node.js process with skill-based channel system. Uses the pi-mono SDK to 
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
 | `src/index.ts` | Orchestrator: state, message loop, agent invocation |
+| `src/container-runner.ts` | Spawns pi-mono agent containers with mounts, syncs container/skills |
+| `container/agent-runner/src/index.ts` | pi-mono SDK entry point (stdin JSON-RPC, IPC bridge) |
 | `src/channels/registry.ts` | Channel registry (self-registration at startup) |
 | `src/ipc.ts` | IPC watcher and task processing |
 | `src/router.ts` | Message formatting and outbound routing |
 | `src/config.ts` | Trigger pattern, paths, intervals |
-| `src/container-runner.ts` | Spawns agent containers with mounts |
-| `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations |
 | `src/extension-manager.ts` | pi Extension lifecycle (install, update, remove) |
 | `src/meeting-manager.ts` | Autonomous meeting lifecycle and turn enforcement |
 | `src/channels/telegram/swarm-router.ts` | Routes Telegram @agent_* mentions to correct agent containers |
 | `src/autonomous-messages.ts` | Proactive message dispatch with guardrails |
+| `container/skills/` | Container skills loaded inside pi-mono agent at runtime |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
-| `container/skills/` | Skills loaded inside agent containers (browser, status, formatting) |
 
 ## Secrets / Credentials / Proxy
 

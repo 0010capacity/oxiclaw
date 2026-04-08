@@ -20,7 +20,13 @@
  *   Additional freeform instructions in Markdown...
  */
 
-import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from 'fs';
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  mkdirSync,
+  writeFileSync,
+} from 'fs';
 import path from 'path';
 
 import { GROUPS_DIR } from './config.js';
@@ -130,7 +136,9 @@ let yamlParser: ((raw: string) => Record<string, unknown>) | null = null;
  * setYamlParser(yamlParse);
  * ```
  */
-export function setYamlParser(parser: (raw: string) => Record<string, unknown>): void {
+export function setYamlParser(
+  parser: (raw: string) => Record<string, unknown>,
+): void {
   yamlParser = parser;
 }
 
@@ -177,9 +185,10 @@ export function parsePersonaFile(filePath: string): Persona | null {
   const responsePrefix = String(
     frontmatter.response_prefix || `[${capitalize(role)}]`,
   );
-  const maxTurnsPerMeeting = typeof frontmatter.max_turns_per_meeting === 'number'
-    ? frontmatter.max_turns_per_meeting
-    : DEFAULT_MAX_TURNS_PER_MEETING;
+  const maxTurnsPerMeeting =
+    typeof frontmatter.max_turns_per_meeting === 'number'
+      ? frontmatter.max_turns_per_meeting
+      : DEFAULT_MAX_TURNS_PER_MEETING;
 
   // Build the system prompt injected into pi-mono sessions.
   const systemPromptParts: string[] = [];
@@ -295,7 +304,13 @@ export function getDefaultPrefix(agentName: string): string {
  * Build the absolute path to a persona.md file.
  */
 export function buildPersonaPath(chatId: string, agentName: string): string {
-  return path.join(GROUPS_DIR, chatId, AGENTS_SUBDIR, agentName, PERSONA_FILENAME);
+  return path.join(
+    GROUPS_DIR,
+    chatId,
+    AGENTS_SUBDIR,
+    agentName,
+    PERSONA_FILENAME,
+  );
 }
 
 /**
@@ -329,7 +344,8 @@ export function ensureAgentDir(
     const description =
       personaOverrides?.description || `AI agent with the role of ${role}.`;
     const expertise = personaOverrides?.expertise || [];
-    const maxTurns = personaOverrides?.max_turns_per_meeting || DEFAULT_MAX_TURNS_PER_MEETING;
+    const maxTurns =
+      personaOverrides?.max_turns_per_meeting || DEFAULT_MAX_TURNS_PER_MEETING;
 
     const frontmatter = [
       '---',
