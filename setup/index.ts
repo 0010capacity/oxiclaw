@@ -9,11 +9,26 @@ const STEPS: Record<
   string,
   () => Promise<{ run: (args: string[]) => Promise<void> }>
 > = {
-  timezone: () => import('./timezone.js'),
+  // Step order matches the SKILL.md 10-step flow:
+  // 1. environment  — detect OS/WSL/container runtime/existing config
+  // 2. bootstrap    — run setup.sh, verify Node/dependencies/native modules
+  // 3. timezone     — detect and persist IANA timezone
+  // 4. container    — build agent container image
+  // 5. credentials  — configure pi-mono SDK auth.json
+  // 6. channels    — (handled by SKILL.md via AskUserQuestion, this step is a passthrough)
+  // 7. groups      — sync group metadata from messaging platforms
+  // 8. skills      — offer optional skills
+  // 9. mounts      — configure external directory access allowlist
+  // 10. service    — register launchd/systemd/nohup service
+  // 11. verify     — end-to-end health check
   environment: () => import('./environment.js'),
+  bootstrap: () => import('./bootstrap.js'),
+  timezone: () => import('./timezone.js'),
   container: () => import('./container.js'),
+  credentials: () => import('./credentials.js'),
+  channels: () => import('./channels.js'),
   groups: () => import('./groups.js'),
-  register: () => import('./register.js'),
+  skills: () => import('./skills.js'),
   mounts: () => import('./mounts.js'),
   service: () => import('./service.js'),
   verify: () => import('./verify.js'),

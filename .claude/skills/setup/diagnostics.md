@@ -11,7 +11,7 @@ node -p "process.versions.node.split('.')[0]"
 
 Check if the user migrated from OpenClaw during this setup session (i.e. `/migrate-from-openclaw` was invoked). If you're unsure (e.g. after context compaction), check for `migration-state.md` in the project root — it exists during and sometimes after migration.
 
-Write `/tmp/nanoclaw-diagnostics.json`. No paths, usernames, hostnames, or IP addresses.
+Write `/tmp/oxiclaw-diagnostics.json`. No paths, usernames, hostnames, or IP addresses.
 
 ```json
 {
@@ -20,7 +20,7 @@ Write `/tmp/nanoclaw-diagnostics.json`. No paths, usernames, hostnames, or IP ad
   "distinct_id": "<uuid>",
   "properties": {
     "success": true,
-    "nanoclaw_version": "1.2.21",
+    "oxiclaw_version": "<from package.json>",
     "os_platform": "darwin",
     "arch": "arm64",
     "node_major_version": 22,
@@ -36,8 +36,8 @@ Show the entire JSON to the user and ask via AskUserQuestion: **Yes** / **No** /
 
 **Yes**:
 ```bash
-curl -s -X POST https://us.i.posthog.com/capture/ -H 'Content-Type: application/json' -d @/tmp/nanoclaw-diagnostics.json
-rm /tmp/nanoclaw-diagnostics.json
+curl -s -X POST https://us.i.posthog.com/capture/ -H 'Content-Type: application/json' -d @/tmp/oxiclaw-diagnostics.json
+rm /tmp/oxiclaw-diagnostics.json
 ```
 
 **No**: `rm /tmp/nanoclaw-diagnostics.json`

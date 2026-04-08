@@ -143,7 +143,7 @@ curl -sS --max-time 3 -X POST https://us.i.posthog.com/capture/ \
   >/dev/null 2>&1 &
 
 cat <<EOF
-=== NANOCLAW SETUP: BOOTSTRAP ===
+=== OXICLAW SETUP: BOOTSTRAP ===
 PLATFORM: $PLATFORM
 IS_WSL: $IS_WSL
 IS_ROOT: $IS_ROOT

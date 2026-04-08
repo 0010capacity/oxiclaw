@@ -96,13 +96,25 @@ export async function run(_args: string[]): Promise<void> {
     }
   }
 
-  // 3. Check credentials
+  // 3. Check credentials (pi-mono SDK auth.json per-group)
   let credentials = 'missing';
-  const envFile = path.join(projectRoot, '.env');
-  if (fs.existsSync(envFile)) {
-    const envContent = fs.readFileSync(envFile, 'utf-8');
-    if (/^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|ONECLI_URL)=/m.test(envContent)) {
-      credentials = 'configured';
+  const authJsonPath = path.join(
+    projectRoot,
+    'data',
+    'credentials',
+    'main',
+    '.pi',
+    'agent',
+    'auth.json',
+  );
+  if (fs.existsSync(authJsonPath)) {
+    try {
+      const auth = JSON.parse(fs.readFileSync(authJsonPath, 'utf-8'));
+      if (auth.providers?.anthropic?.api_key) {
+        credentials = 'configured';
+      }
+    } catch {
+      // Invalid JSON — not configured
     }
   }
 
