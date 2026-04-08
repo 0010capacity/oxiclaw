@@ -12,10 +12,14 @@
  */
 
 const ALLOWED_TAGS = new Set([
-  'b', 'strong',
-  'i', 'em',
+  'b',
+  'strong',
+  'i',
+  'em',
   'u',
-  's', 'strike', 'del',
+  's',
+  'strike',
+  'del',
   'code',
   'pre',
   'a',
@@ -39,7 +43,8 @@ export function sanitizeHtmlForTelegram(html: string): string {
   let result = html;
 
   // Step 1: Remove dangerous entire tags (strip content too)
-  const dangerousTags = /<(script|style|iframe|object|embed|form|input|button|select|textarea|svg|math)[^>]*>[\s\S]*?<\/\1>/gi;
+  const dangerousTags =
+    /<(script|style|iframe|object|embed|form|input|button|select|textarea|svg|math)[^>]*>[\s\S]*?<\/\1>/gi;
   result = result.replace(dangerousTags, '');
 
   // Step 2: Remove tags by stripping their content and tags
@@ -50,45 +55,53 @@ export function sanitizeHtmlForTelegram(html: string): string {
   result = result.replace(/\s(on\w+)\s*=/gi, ' data-removed-$1=');
 
   // Step 4: Process remaining tags
-  result = result.replace(/<(\/?)(\w+)([^>]*?)(\/?)>/g, (match, closing, tag, attrs, selfClose) => {
-    const lowerTag = tag.toLowerCase();
+  result = result.replace(
+    /<(\/?)(\w+)([^>]*?)(\/?)>/g,
+    (match, closing, tag, attrs, selfClose) => {
+      const lowerTag = tag.toLowerCase();
 
-    // Strip unknown tags entirely (but keep their content)
-    if (!ALLOWED_TAGS.has(lowerTag)) {
-      return '';
-    }
-
-    // Process attributes — only keep href and class
-    if (attrs.trim()) {
-      const cleanAttrs = attrs.replace(/(\w+)\s*=\s*["'][^"']*["']/g, (attrMatch: string, attrName: string) => {
-        const lowerAttr = attrName.toLowerCase();
-        if (!ALLOWED_ATTRS.has(lowerAttr)) return '';
-
-        let value = attrMatch.match(/=["']([^"']*)["']/)?.[1] || '';
-
-        // Sanitize href values — block javascript:, data:, vbscript:, etc.
-        if (lowerAttr === 'href') {
-          const hrefLower = value.toLowerCase().trim();
-          if (
-            hrefLower.startsWith('javascript:') ||
-            hrefLower.startsWith('data:') ||
-            hrefLower.startsWith('vbscript:') ||
-            hrefLower.startsWith('on')
-          ) {
-            return '';
-          }
-        }
-
-        return attrMatch;
-      }).trim();
-
-      if (cleanAttrs) {
-        return `<${closing}${tag}${cleanAttrs}${selfClose}>`;
+      // Strip unknown tags entirely (but keep their content)
+      if (!ALLOWED_TAGS.has(lowerTag)) {
+        return '';
       }
-    }
 
-    return `<${closing}${tag}>`;
-  });
+      // Process attributes — only keep href and class
+      if (attrs.trim()) {
+        const cleanAttrs = attrs
+          .replace(
+            /(\w+)\s*=\s*["'][^"']*["']/g,
+            (attrMatch: string, attrName: string) => {
+              const lowerAttr = attrName.toLowerCase();
+              if (!ALLOWED_ATTRS.has(lowerAttr)) return '';
+
+              let value = attrMatch.match(/=["']([^"']*)["']/)?.[1] || '';
+
+              // Sanitize href values — block javascript:, data:, vbscript:, etc.
+              if (lowerAttr === 'href') {
+                const hrefLower = value.toLowerCase().trim();
+                if (
+                  hrefLower.startsWith('javascript:') ||
+                  hrefLower.startsWith('data:') ||
+                  hrefLower.startsWith('vbscript:') ||
+                  hrefLower.startsWith('on')
+                ) {
+                  return '';
+                }
+              }
+
+              return attrMatch;
+            },
+          )
+          .trim();
+
+        if (cleanAttrs) {
+          return `<${closing}${tag}${cleanAttrs}${selfClose}>`;
+        }
+      }
+
+      return `<${closing}${tag}>`;
+    },
+  );
 
   // Step 5: Escape remaining < and > that are not part of valid tags
   // This handles cases where content contains HTML-like text
@@ -96,14 +109,17 @@ export function sanitizeHtmlForTelegram(html: string): string {
 
   // Step 6: Unescape our own escaped sequences that turned out to be text
   // Re-check: if something looks like a legitimate tag after all, re-tag it
-  result = result.replace(/&lt;(\/?)(\w+)([^&]*)(&gt;)?/g, (match, closing, tag, content, gt) => {
-    const lowerTag = tag.toLowerCase();
-    if (ALLOWED_TAGS.has(lowerTag)) {
-      return `<${closing}${tag}${content}${gt || '>'}`;
-    }
-    // It was truly text — keep the escaped version
-    return match;
-  });
+  result = result.replace(
+    /&lt;(\/?)(\w+)([^&]*)(&gt;)?/g,
+    (match, closing, tag, content, gt) => {
+      const lowerTag = tag.toLowerCase();
+      if (ALLOWED_TAGS.has(lowerTag)) {
+        return `<${closing}${tag}${content}${gt || '>'}`;
+      }
+      // It was truly text — keep the escaped version
+      return match;
+    },
+  );
 
   return result.trim();
 }

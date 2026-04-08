@@ -135,7 +135,10 @@ export class MeetingManager extends EventEmitter {
   private timeoutChecker: ReturnType<typeof setInterval> | null = null;
 
   /** Track summarizing auto-completion timers to prevent memory leaks. */
-  private summarizingTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+  private summarizingTimeouts = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
 
   private constructor() {
     super();

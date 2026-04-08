@@ -372,7 +372,11 @@ export class SwarmRouter {
       if (replyToMessageId) {
         options.reply_parameters = { message_id: replyToMessageId };
       }
-      await this.bot.telegram.sendMessage(chatId, sanitizeHtmlForTelegram(formatted), options);
+      await this.bot.telegram.sendMessage(
+        chatId,
+        sanitizeHtmlForTelegram(formatted),
+        options,
+      );
     } catch (err) {
       logger.error(
         { err, chatJid, agentName },

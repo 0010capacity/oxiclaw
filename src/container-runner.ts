@@ -164,7 +164,7 @@ function buildVolumeMounts(
       settingsFile,
       JSON.stringify(
         {
-          customTools: ['/workspace/group/extensions'],
+          extensions: ['/workspace/group/extensions'],
           env: {
             // pi-mono SDK settings
             PI_ENABLE_AUTO_MEMORY: '1',
@@ -187,9 +187,13 @@ function buildVolumeMounts(
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
   }
+  // Mount at /home/node/.pi/agent so the SDK finds:
+  // - skills at /home/node/.pi/agent/skills/  (user-level, from getAgentDir()/skills)
+  // - settings at /home/node/.pi/agent/settings.json (from getSettingsPath())
+  // This also allows project-level skills at /workspace/group/.pi/skills/
   mounts.push({
     hostPath: groupSessionsDir,
-    containerPath: '/home/node/.pi',
+    containerPath: '/home/node/.pi/agent',
     readonly: false,
   });
 

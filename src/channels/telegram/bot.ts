@@ -138,7 +138,9 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
         return;
       }
       const chatId = extractChatId(jid);
-      await bot!.telegram.sendMessage(chatId, sanitizeHtmlForTelegram(text), { parse_mode: 'HTML' });
+      await bot!.telegram.sendMessage(chatId, sanitizeHtmlForTelegram(text), {
+        parse_mode: 'HTML',
+      });
     },
     registeredGroups,
   });
@@ -151,7 +153,9 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
         return;
       }
       const chatId = extractChatId(jid);
-      await bot!.telegram.sendMessage(chatId, sanitizeHtmlForTelegram(text), { parse_mode: 'HTML' });
+      await bot!.telegram.sendMessage(chatId, sanitizeHtmlForTelegram(text), {
+        parse_mode: 'HTML',
+      });
     },
     // promptAgent is optional — meeting responses are processed via
     // the orchestrator's normal message flow (processGroupMessages).

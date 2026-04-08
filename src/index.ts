@@ -411,7 +411,9 @@ async function runAgent(
 
     // Update session with container name for health check lookup
     if (registeredContainerName) {
-      updateAgentSession(agentSessionId, { container_id: registeredContainerName });
+      updateAgentSession(agentSessionId, {
+        container_id: registeredContainerName,
+      });
     }
 
     // End the agent session
@@ -775,7 +777,10 @@ async function main(): Promise<void> {
     sendMessage: async (jid: string, text: string) => {
       const channel = findChannel(channels, jid);
       if (!channel) {
-        logger.warn({ jid }, 'No channel owns JID, cannot send autonomous message');
+        logger.warn(
+          { jid },
+          'No channel owns JID, cannot send autonomous message',
+        );
         return;
       }
       const formatted = formatOutbound(text);
@@ -794,8 +799,14 @@ async function main(): Promise<void> {
       // built-in sendHealthCheckViaIPC but triggered via stdin so the container
       // knows it's a health check (vs. task IPC files).
       const tmpDir = fs.realpathSync(process.env.TMPDIR || '/tmp');
-      const requestFile = path.join(tmpDir, `oxiclaw-health-${containerId}.json`);
-      const responseFile = path.join(tmpDir, `oxiclaw-health-${containerId}-resp.json`);
+      const requestFile = path.join(
+        tmpDir,
+        `oxiclaw-health-${containerId}.json`,
+      );
+      const responseFile = path.join(
+        tmpDir,
+        `oxiclaw-health-${containerId}-resp.json`,
+      );
 
       const requestId = `health-${Date.now()}`;
       const request = {
@@ -808,7 +819,9 @@ async function main(): Promise<void> {
       // Clean up stale response file
       try {
         fs.unlinkSync(responseFile);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
 
       // Write request atomically
       const tmpRequest = `${requestFile}.tmp`;
@@ -817,42 +830,58 @@ async function main(): Promise<void> {
 
       // Also send via stdin so container processes it immediately
       const stdin = queue.getStdin(
-        Object.keys(registeredGroups).find((jid) => queue.getContainerName(jid) === containerId) || '',
+        Object.keys(registeredGroups).find(
+          (jid) => queue.getContainerName(jid) === containerId,
+        ) || '',
       );
       if (stdin) {
         try {
           stdin.write(JSON.stringify(request) + '\n');
-        } catch { /* stdin may not be writable */ }
+        } catch {
+          /* stdin may not be writable */
+        }
       }
 
       // Poll for response file with timeout
-      return new Promise<import('./health-checker.js').HealthCheckResponse>((resolve, reject) => {
-        const deadline = Date.now() + 10_000;
-        const pollInterval = setInterval(() => {
-          if (Date.now() > deadline) {
-            clearInterval(pollInterval);
-            try {
-              fs.unlinkSync(requestFile);
-            } catch { /* ignore */ }
-            reject(new Error('Health check request timed out'));
-            return;
-          }
-          try {
-            if (fs.existsSync(responseFile)) {
+      return new Promise<import('./health-checker.js').HealthCheckResponse>(
+        (resolve, reject) => {
+          const deadline = Date.now() + 10_000;
+          const pollInterval = setInterval(() => {
+            if (Date.now() > deadline) {
               clearInterval(pollInterval);
-              const content = fs.readFileSync(responseFile, 'utf-8');
-              try {
-                fs.unlinkSync(responseFile);
-              } catch { /* ignore */ }
               try {
                 fs.unlinkSync(requestFile);
-              } catch { /* ignore */ }
-              const response = JSON.parse(content);
-              resolve(response as import('./health-checker.js').HealthCheckResponse);
+              } catch {
+                /* ignore */
+              }
+              reject(new Error('Health check request timed out'));
+              return;
             }
-          } catch { /* poll continues */ }
-        }, 500);
-      });
+            try {
+              if (fs.existsSync(responseFile)) {
+                clearInterval(pollInterval);
+                const content = fs.readFileSync(responseFile, 'utf-8');
+                try {
+                  fs.unlinkSync(responseFile);
+                } catch {
+                  /* ignore */
+                }
+                try {
+                  fs.unlinkSync(requestFile);
+                } catch {
+                  /* ignore */
+                }
+                const response = JSON.parse(content);
+                resolve(
+                  response as import('./health-checker.js').HealthCheckResponse,
+                );
+              }
+            } catch {
+              /* poll continues */
+            }
+          }, 500);
+        },
+      );
     },
     onRestartNeeded: async (session) => {
       logger.warn(
@@ -949,7 +978,11 @@ async function main(): Promise<void> {
                 const autoManager = getAutonomousMessageManager();
                 if (autoManager) {
                   const sessionId = `swarm-${msg.chatJid}-${agentName}`;
-                  await autoManager.handleAgentResponse(sessionId, msg.chatJid, text);
+                  await autoManager.handleAgentResponse(
+                    sessionId,
+                    msg.chatJid,
+                    text,
+                  );
                 }
               }
               if (output.status === 'success') {
