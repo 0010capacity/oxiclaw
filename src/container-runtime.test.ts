@@ -1,5 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Set CONTAINER_RUNTIME env BEFORE importing container-runtime.ts.
+// This prevents getRuntimeBin() from calling execSync during module
+// initialization (which would consume our mock's first queued value).
+process.env.CONTAINER_RUNTIME = 'docker';
+
+const mockExecSync = vi.fn();
+vi.mock('child_process', () => ({
+  execSync: (...args: unknown[]) => mockExecSync(...args),
+}));
+
 // Mock logger
 vi.mock('./logger.js', () => ({
   logger: {
@@ -8,12 +18,6 @@ vi.mock('./logger.js', () => ({
     warn: vi.fn(),
     error: vi.fn(),
   },
-}));
-
-// Mock child_process — store the mock fn so tests can configure it
-const mockExecSync = vi.fn();
-vi.mock('child_process', () => ({
-  execSync: (...args: unknown[]) => mockExecSync(...args),
 }));
 
 import {
@@ -93,16 +97,13 @@ describe('ensureContainerRuntimeRunning', () => {
 
 describe('cleanupOrphans', () => {
   it('stops orphaned oxiclaw containers', () => {
-    // docker ps returns container names, one per line
     mockExecSync.mockReturnValueOnce(
       'oxiclaw-group1-111\noxiclaw-group2-222\n',
     );
-    // stop calls succeed
     mockExecSync.mockReturnValue('');
 
     cleanupOrphans();
 
-    // ps + 2 stop calls
     expect(mockExecSync).toHaveBeenCalledTimes(3);
     expect(mockExecSync).toHaveBeenNthCalledWith(
       2,
@@ -134,7 +135,7 @@ describe('cleanupOrphans', () => {
       throw new Error('docker not available');
     });
 
-    cleanupOrphans(); // should not throw
+    cleanupOrphans();
 
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ err: expect.any(Error) }),
@@ -144,14 +145,12 @@ describe('cleanupOrphans', () => {
 
   it('continues stopping remaining containers when one stop fails', () => {
     mockExecSync.mockReturnValueOnce('oxiclaw-a-1\noxiclaw-b-2\n');
-    // First stop fails
     mockExecSync.mockImplementationOnce(() => {
       throw new Error('already stopped');
     });
-    // Second stop succeeds
     mockExecSync.mockReturnValueOnce('');
 
-    cleanupOrphans(); // should not throw
+    cleanupOrphans();
 
     expect(mockExecSync).toHaveBeenCalledTimes(3);
     expect(logger.info).toHaveBeenCalledWith(

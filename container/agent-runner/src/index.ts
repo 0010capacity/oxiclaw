@@ -5,15 +5,24 @@
  * Orchestrator communicates via:
  * - stdin: JSON-RPC 2.0 requests (init, prompt, cancel, health_check)
  * - Unix socket: JSON-RPC 2.0 events (session.events, tool results)
+ *
+ * Key design decisions for container reuse:
+ * - stdin stays OPEN between prompts so the container can receive multiple prompts
+ * - Do NOT call stdin.end() after prompt — it kills the container prematurely
+ * - Do NOT auto-init on stdin 'end' event — the orchestrator controls lifecycle
+ * - Poll /workspace/ipc/input/ for follow-up messages and _close sentinel
+ * - SIGTERM triggers graceful shutdown (orchestrator writes _close sentinel)
  */
 
-import { createAgentSession, createCodingTools, FileAuthStorageBackend, AuthStorage } from '@mariozechner/pi-coding-agent';
+import { createAgentSession, createCodingTools, AuthStorage } from '@mariozechner/pi-coding-agent';
 import { IPCBridge } from './ipc-bridge.js';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
 const ORCHESTRATOR_SOCKET = process.env.OXICLAW_IPC_SOCKET || '/tmp/oxiclaw-ipc.sock';
+const IPC_INPUT_DIR = '/workspace/ipc/input';
+const POLL_INTERVAL_MS = 1000;
 
 const CWD = process.env.AGENT_CWD || '/workspace/group';
 const SESSION_ID = process.env.AGENT_SESSION_ID || 'default';
@@ -39,6 +48,7 @@ interface AgentSession {
 
 let currentSession: AgentSession | null = null;
 let ipcBridge: IPCBridge | null = null;
+let isShuttingDown = false;
 
 function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
@@ -83,15 +93,12 @@ async function handlePromptRequest(params: Record<string, unknown>): Promise<Pro
     // Capture final result from agent_end
     if (event.type === 'agent_end') {
       const endEvent = event as { type: 'agent_end'; messages: Array<ContentBlock & { content?: string | unknown[]; tool_calls?: Array<{ name: string; params: Record<string, unknown> }> }> };
-      // lastMessage can contain a content array (from newer models) or a single text string
       const lastMessage = endEvent.messages[endEvent.messages.length - 1] as ContentBlock & { content?: string | unknown[] };
       const rawContent = lastMessage?.content;
 
       if (typeof rawContent === 'string') {
         finalContent = rawContent;
       } else if (Array.isArray(rawContent)) {
-        // Content is an array of content blocks - extract text from each text block
-        // Filter out 'thinking' blocks, keep only 'text' blocks with actual response
         const textBlocks = (rawContent as Array<{ type: string; text?: string }>)
           .filter(b => b.type === 'text' && b.text)
           .map(b => b.text as string);
@@ -101,11 +108,9 @@ async function handlePromptRequest(params: Record<string, unknown>): Promise<Pro
         if (msg.tool_calls) {
           toolCalls.push(...msg.tool_calls);
         }
-        // Extract image content blocks
         if (msg.type === 'image' && msg.url) {
           responseImages.push(msg.url as string);
         }
-        // Also check top-level content for image URLs (some models format differently)
         if (typeof msg.content === 'string' && msg.content.startsWith('data:image/')) {
           responseImages.push(msg.content);
         }
@@ -130,13 +135,10 @@ async function handleInitRequest(_params: Record<string, unknown>): Promise<void
   currentSession = null;
 
   // Create coding tools scoped to the working directory
-  // createCodingTools returns AgentTool<any>[], but type signatures differ from Tool[]
-  // Use 'any' cast to bypass TypeScript compatibility check
   const tools = createCodingTools(CWD) as any;
 
   // Create agent session with pi-mono SDK
-  // SDK reads credentials from XDG_CONFIG_HOME/pi/agent/auth.json and models from XDG_CONFIG_HOME/pi/agent/models.json
-  // These are mounted by the orchestrator before container start
+  // SDK reads credentials from XDG_CONFIG_HOME/pi/agent/auth.json
   const authStorage = AuthStorage.create('/workspace/group/pi/agent/auth.json');
   const { session } = await createAgentSession({
     cwd: CWD,
@@ -155,9 +157,74 @@ async function handleCancelRequest(_params: Record<string, unknown>): Promise<vo
   log('Cancel requested — session will end after current turn');
 }
 
+/**
+ * Poll /workspace/ipc/input/ for new message files and _close sentinel.
+ * This is the mechanism the orchestrator uses to send follow-up messages
+ * without killing the container.
+ */
+async function pollIpcInput(): Promise<void> {
+  try {
+    if (!fs.existsSync(IPC_INPUT_DIR)) return;
+
+    const files = fs.readdirSync(IPC_INPUT_DIR).filter(f => f.endsWith('.json'));
+    for (const file of files.sort()) {
+      const filePath = path.join(IPC_INPUT_DIR, file);
+      try {
+        const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        if (data.type === 'message' && typeof data.text === 'string') {
+          log(`IPC input: forwarding message (${data.text.length} chars) as prompt`);
+          // Forward as a new prompt request
+          try {
+            const result = await handlePromptRequest({ prompt: data.text });
+            // Respond via stdout
+            respond(null, {
+              session_id: SESSION_ID,
+              content: result.content,
+              tool_calls: result.toolCalls,
+              images: result.images,
+            });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            respond(null, undefined, { code: -32603, message });
+          }
+        }
+      } catch (err) {
+        log(`IPC input parse error: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        fs.unlinkSync(filePath);
+      }
+    }
+
+    // Check for _close sentinel
+    const closeSentinel = path.join(IPC_INPUT_DIR, '_close');
+    if (fs.existsSync(closeSentinel)) {
+      log('_close sentinel received, initiating graceful shutdown');
+      fs.unlinkSync(closeSentinel);
+      triggerShutdown();
+    }
+  } catch (err) {
+    log(`IPC input poll error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // Schedule next poll unless shutting down
+  if (!isShuttingDown) {
+    setTimeout(() => pollIpcInput(), POLL_INTERVAL_MS);
+  }
+}
+
+/**
+ * Trigger graceful shutdown. Called by _close sentinel or SIGTERM.
+ */
+function triggerShutdown(): void {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  log('Agent runner shutting down gracefully');
+  ipcBridge?.close();
+  process.exit(0);
+}
+
 async function readStdinRequests(): Promise<void> {
   let buffer = '';
-  let isShuttingDown = false;
 
   const processLine = (line: string): void => {
     if (!line.trim()) return;
@@ -174,18 +241,17 @@ async function readStdinRequests(): Promise<void> {
     }
   };
 
-  const shutdown = (signal: string): void => {
-    if (isShuttingDown) return;
-    isShuttingDown = true;
-    log(`Shutdown signal (${signal}), closing stdin listener`);
-    process.stdin.pause();
-  };
-
   process.stdin.setEncoding('utf8');
 
-  // Handle graceful shutdown
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  // Handle graceful shutdown via signals
+  process.on('SIGTERM', () => {
+    log('SIGTERM received');
+    triggerShutdown();
+  });
+  process.on('SIGINT', () => {
+    log('SIGINT received');
+    triggerShutdown();
+  });
 
   process.stdin.on('data', (chunk: string) => {
     if (isShuttingDown) return;
@@ -199,18 +265,21 @@ async function readStdinRequests(): Promise<void> {
     }
   });
 
-  process.stdin.on('end', async () => {
+  // NOTE: Do NOT handle stdin 'end' by auto-initing or exiting.
+  // stdin.end() is called by the old container-runner.ts after the first prompt,
+  // but with the new pool, stdin stays open. If the container is being
+  // killed externally, SIGTERM/SIGINT will handle it.
+  // The 'end' event here is just a safety net for non-pool scenarios.
+  process.stdin.on('end', () => {
     if (isShuttingDown) return;
-    // Process any remaining content in the buffer
-    if (buffer.trim()) {
-      processLine(buffer.trim());
-    }
-    // If no session was initialized and stdin ended cleanly, init now
-    // await ensures session is ready before the handler completes
+    log('stdin ended (safety fallback — initializing session if needed)');
+    // Auto-init if no session exists — this handles the race where stdin closes
+    // before the orchestrator sends init (Docker entrypoint tsc, pipe drain, etc.)
     if (!currentSession) {
-      log('Stdin ended, initializing session automatically');
-      await handleInitRequest({}).catch((err) => {
-        log(`Auto-init error: ${err instanceof Error ? err.message : String(err)}`);
+      handleInitRequest({}).then(() => {
+        log('Auto-init after stdin end complete');
+      }).catch((err) => {
+        log(`Auto-init error after stdin end: ${err instanceof Error ? err.message : String(err)}`);
       });
     }
   });
@@ -245,8 +314,6 @@ async function handleStdinRequest(req: StdinRequest): Promise<void> {
         break;
 
       case 'health_check':
-        // Write response to temp file for orchestrator health checker to poll.
-        // Matches the sendHealthCheckViaIPC pattern in health-checker.ts.
         const tmpDir = fs.realpathSync(os.tmpdir());
         const respFile = path.join(tmpDir, `oxiclaw-health-${SESSION_ID}-resp.json`);
         const respContent = JSON.stringify({
@@ -260,7 +327,6 @@ async function handleStdinRequest(req: StdinRequest): Promise<void> {
         } catch (writeErr) {
           log(`Health check response write failed: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`);
         }
-        // Also respond via stdout for direct callers
         respond(req.id ?? null, {
           session_id: SESSION_ID,
           active: currentSession !== null,
@@ -290,6 +356,10 @@ async function main(): Promise<void> {
     log('Continuing without IPC bridge');
   }
 
+  // Start IPC input polling for follow-up messages
+  setTimeout(() => pollIpcInput(), POLL_INTERVAL_MS);
+
+  // Read stdin requests (init, prompt, cancel, health_check)
   await readStdinRequests();
 
   log('Agent runner finished');

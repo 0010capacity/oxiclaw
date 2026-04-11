@@ -20,6 +20,12 @@ const DEFAULT_CONFIG: SenderAllowlistConfig = {
   logDenied: true,
 };
 
+// --- TTL cache (avoids disk read on every incoming message) ---
+const CACHE_TTL_MS = 5_000;
+let cachedConfig: SenderAllowlistConfig | null = null;
+let cachedAt = 0;
+let cachedPath: string | null = null;
+
 function isValidEntry(entry: unknown): entry is ChatAllowlistEntry {
   if (!entry || typeof entry !== 'object') return false;
   const e = entry as Record<string, unknown>;
@@ -30,11 +36,37 @@ function isValidEntry(entry: unknown): entry is ChatAllowlistEntry {
   return validAllow && validMode;
 }
 
+/**
+ * Invalidate the cached allowlist config.
+ * Call after modifying the allowlist file externally.
+ */
+export function invalidateSenderAllowlistCache(): void {
+  cachedConfig = null;
+  cachedAt = 0;
+}
+
 export function loadSenderAllowlist(
   pathOverride?: string,
 ): SenderAllowlistConfig {
   const filePath = pathOverride ?? SENDER_ALLOWLIST_PATH;
 
+  // Skip cache for test overrides with custom paths
+  if (!pathOverride && cachedConfig && cachedPath === filePath && Date.now() - cachedAt < CACHE_TTL_MS) {
+    return cachedConfig;
+  }
+
+  const config = loadSenderAllowlistFromDisk(filePath);
+
+  if (!pathOverride) {
+    cachedConfig = config;
+    cachedPath = filePath;
+    cachedAt = Date.now();
+  }
+
+  return config;
+}
+
+function loadSenderAllowlistFromDisk(filePath: string): SenderAllowlistConfig {
   let raw: string;
   try {
     raw = fs.readFileSync(filePath, 'utf-8');

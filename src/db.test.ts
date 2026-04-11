@@ -376,8 +376,8 @@ describe('getMessagesSince', () => {
     expect(messageTagCount).toBe(10);
   });
 
-  it('filters pre-migration bot messages via content prefix backstop', () => {
-    // Simulate a message written before migration: has prefix but is_bot_message = 0
+  it('includes messages without is_bot_message flag set', () => {
+    // A message without is_bot_message=1 is included regardless of content prefix
     store({
       id: 'm5',
       chat_jid: 'group@g.us',
@@ -386,12 +386,9 @@ describe('getMessagesSince', () => {
       content: 'Andy: old bot reply',
       timestamp: '2024-01-01T00:00:05.000Z',
     });
-    const msgs = getMessagesSince(
-      'group@g.us',
-      '2024-01-01T00:00:04.000Z',
-      'Andy',
-    );
-    expect(msgs).toHaveLength(0);
+    const msgs = getMessagesSince('group@g.us', '2024-01-01T00:00:04.000Z', 'Andy');
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].id).toBe('m5');
   });
 });
 

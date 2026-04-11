@@ -52,7 +52,7 @@ describe('database migrations', () => {
       });
       expect(chats.find((chat) => chat.jid === 'tg:-10012345')).toMatchObject({
         channel: 'telegram',
-        is_group: 0,
+        is_group: 1,
       });
       expect(chats.find((chat) => chat.jid === 'room@g.us')).toMatchObject({
         channel: 'whatsapp',

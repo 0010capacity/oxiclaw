@@ -1,13 +1,11 @@
-import { ChildProcess } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
-import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { ASSISTANT_NAME, DATA_DIR, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
 import {
-  ContainerOutput,
-  runContainerAgent,
   writeTasksSnapshot,
-} from './container-runner.js';
+  ContainerOutput,
+} from './container-pool.js';
 import {
   getAllTasks,
   getDueTasks,
@@ -16,7 +14,6 @@ import {
   updateTask,
   updateTaskAfterRun,
 } from './db.js';
-import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
@@ -65,14 +62,8 @@ export function computeNextRun(task: ScheduledTask): string | null {
 export interface SchedulerDependencies {
   registeredGroups: () => Record<string, RegisteredGroup>;
   getSessions: () => Record<string, string>;
-  queue: GroupQueue;
-  onProcess: (
-    groupJid: string,
-    proc: ChildProcess,
-    containerName: string,
-    groupFolder: string,
-  ) => void;
   sendMessage: (jid: string, text: string) => Promise<void>;
+  getPool: () => import('./container-pool.js').ContainerPool;
 }
 
 async function runTask(
@@ -165,49 +156,39 @@ async function runTask(
     if (closeTimer) return; // already scheduled
     closeTimer = setTimeout(() => {
       logger.debug({ taskId: task.id }, 'Closing task container after result');
-      deps.queue.closeStdin(task.chat_jid);
+      deps.getPool().closeContainer(task.chat_jid);
     }, TASK_CLOSE_DELAY_MS);
   };
 
   try {
-    const output = await runContainerAgent(
-      group,
-      {
-        prompt: task.prompt,
-        sessionId,
-        groupFolder: task.group_folder,
-        chatJid: task.chat_jid,
-        isMain,
-        isScheduledTask: true,
-        assistantName: ASSISTANT_NAME,
-        script: task.script || undefined,
-      },
-      (proc, containerName) =>
-        deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
-      async (streamedOutput: ContainerOutput) => {
-        if (streamedOutput.result) {
-          result = streamedOutput.result;
-          // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
-          scheduleClose();
-        }
-        if (streamedOutput.status === 'success') {
-          deps.queue.notifyIdle(task.chat_jid);
-          scheduleClose(); // Close promptly even when result is null (e.g. IPC-only tasks)
-        }
-        if (streamedOutput.status === 'error') {
-          error = streamedOutput.error || 'Unknown error';
-        }
-      },
-    );
+    // Collect streaming output for the final result
+    let streamedResult: ContainerOutput | null = null;
+
+    const output = await deps.getPool().sendPrompt(group, {
+      prompt: task.prompt,
+      sessionId,
+      groupFolder: task.group_folder,
+      chatJid: task.chat_jid,
+      isMain,
+      isScheduledTask: true,
+      assistantName: ASSISTANT_NAME,
+      script: task.script || undefined,
+    });
 
     if (closeTimer) clearTimeout(closeTimer);
 
     if (output.status === 'error') {
       error = output.error || 'Unknown error';
+      // Forward error to user
+      await deps.sendMessage(task.chat_jid, `Task error: ${output.error || 'Unknown error'}`);
     } else if (output.result) {
-      // Result was already forwarded to the user via the streaming callback above
       result = output.result;
+      // Forward result to user (sendMessage handles formatting)
+      await deps.sendMessage(task.chat_jid, result);
+      scheduleClose();
+    } else {
+      // Task completed with no result — close container promptly
+      scheduleClose();
     }
 
     logger.info(
@@ -264,9 +245,10 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
           continue;
         }
 
-        deps.queue.enqueueTask(currentTask.chat_jid, currentTask.id, () =>
-          runTask(currentTask, deps),
-        );
+        // Run task directly via the pool (no queue needed with pool)
+        runTask(currentTask, deps).catch((err) => {
+          logger.error({ taskId: currentTask.id, err }, 'Unhandled task error');
+        });
       }
     } catch (err) {
       logger.error({ err }, 'Error in scheduler loop');

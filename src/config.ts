@@ -71,9 +71,17 @@ export function buildTriggerPattern(trigger: string): RegExp {
 
 export const DEFAULT_TRIGGER = `@${ASSISTANT_NAME}`;
 
+// Cache compiled trigger patterns — group triggers don't change at runtime
+const triggerPatternCache = new Map<string, RegExp>();
+
 export function getTriggerPattern(trigger?: string): RegExp {
-  const normalizedTrigger = trigger?.trim();
-  return buildTriggerPattern(normalizedTrigger || DEFAULT_TRIGGER);
+  const normalizedTrigger = (trigger?.trim() || DEFAULT_TRIGGER);
+  let pattern = triggerPatternCache.get(normalizedTrigger);
+  if (!pattern) {
+    pattern = buildTriggerPattern(normalizedTrigger);
+    triggerPatternCache.set(normalizedTrigger, pattern);
+  }
+  return pattern;
 }
 
 export const TRIGGER_PATTERN = buildTriggerPattern(DEFAULT_TRIGGER);

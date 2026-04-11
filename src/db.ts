@@ -14,6 +14,207 @@ import {
 
 let db: Database.Database;
 
+// ---------------------------------------------------------------------------
+// Prepared statement cache
+//
+// better-sqlite3's .prepare() calls sqlite3_prepare_v2 each time.
+// Caching statements avoids redundant C-level preparation overhead on hot paths.
+// Initialized in initDatabase() / _initTestDatabase() after createSchema().
+// ---------------------------------------------------------------------------
+
+let stmtStoreMessage: Database.Statement;
+let stmtStoreMessageDirect: Database.Statement;
+let stmtStoreChatMetadataWithName: Database.Statement;
+let stmtStoreChatMetadataNoName: Database.Statement;
+let stmtUpdateChatName: Database.Statement;
+let stmtGetAllChats: Database.Statement;
+let stmtGetLastGroupSync: Database.Statement;
+let stmtSetLastGroupSync: Database.Statement;
+let stmtGetNewMessages: Database.Statement | null = null; // dynamic — rebuilt per jid count
+let stmtGetNewMessagesCache = new Map<string, Database.Statement>();
+let stmtGetMessagesSince: Database.Statement;
+let stmtGetLastBotMessageTimestamp: Database.Statement;
+let stmtCreateTask: Database.Statement;
+let stmtGetTaskById: Database.Statement;
+let stmtGetTasksForGroup: Database.Statement;
+let stmtGetAllTasks: Database.Statement;
+let stmtGetDueTasks: Database.Statement;
+let stmtUpdateTaskAfterRun: Database.Statement;
+let stmtLogTaskRun: Database.Statement;
+let stmtDeleteTaskLogs: Database.Statement;
+let stmtDeleteTask: Database.Statement;
+let stmtGetRouterState: Database.Statement;
+let stmtSetRouterState: Database.Statement;
+let stmtGetSession: Database.Statement;
+let stmtSetSession: Database.Statement;
+let stmtDeleteSession: Database.Statement;
+let stmtCreateAgentSession: Database.Statement;
+let stmtGetActiveSessions: Database.Statement;
+let stmtGetAgentSessionMetadata: Database.Statement;
+let stmtEndAgentSession: Database.Statement;
+let stmtGetAllSessions: Database.Statement;
+let stmtCreateMeeting: Database.Statement;
+let stmtGetActiveMeetings: Database.Statement;
+let stmtEndMeeting: Database.Statement;
+let stmtCreateProactiveMessage: Database.Statement;
+let stmtGetProactiveMessagesForGroup: Database.Statement;
+let stmtCreateMeetingTurn: Database.Statement;
+let stmtGetMeetingTurns: Database.Statement;
+let stmtGetRegisteredGroup: Database.Statement;
+let stmtSetRegisteredGroup: Database.Statement;
+let stmtGetAllRegisteredGroups: Database.Statement;
+
+function initStatements(): void {
+  stmtStoreMessage = db.prepare(
+    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, reply_to_message_id, reply_to_message_content, reply_to_sender_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  stmtStoreMessageDirect = db.prepare(
+    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  stmtStoreChatMetadataWithName = db.prepare(
+    `INSERT INTO chats (jid, name, last_message_time, channel, is_group) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(jid) DO UPDATE SET
+       name = excluded.name,
+       last_message_time = MAX(last_message_time, excluded.last_message_time),
+       channel = COALESCE(excluded.channel, channel),
+       is_group = COALESCE(excluded.is_group, is_group)`,
+  );
+  stmtStoreChatMetadataNoName = db.prepare(
+    `INSERT INTO chats (jid, name, last_message_time, channel, is_group) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(jid) DO UPDATE SET
+       last_message_time = MAX(last_message_time, excluded.last_message_time),
+       channel = COALESCE(excluded.channel, channel),
+       is_group = COALESCE(excluded.is_group, is_group)`,
+  );
+  stmtUpdateChatName = db.prepare(
+    `INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)
+     ON CONFLICT(jid) DO UPDATE SET name = excluded.name`,
+  );
+  stmtGetAllChats = db.prepare(
+    `SELECT jid, name, last_message_time, channel, is_group FROM chats ORDER BY last_message_time DESC`,
+  );
+  stmtGetLastGroupSync = db.prepare(
+    `SELECT last_message_time FROM chats WHERE jid = '__group_sync__'`,
+  );
+  stmtSetLastGroupSync = db.prepare(
+    `INSERT OR REPLACE INTO chats (jid, name, last_message_time) VALUES ('__group_sync__', '__group_sync__', ?)`,
+  );
+  stmtGetMessagesSince = db.prepare(
+    `SELECT * FROM (
+       SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me,
+              reply_to_message_id, reply_to_message_content, reply_to_sender_name
+       FROM messages
+       WHERE chat_jid = ? AND timestamp > ?
+         AND is_bot_message = 0
+         AND content != '' AND content IS NOT NULL
+       ORDER BY timestamp DESC
+       LIMIT ?
+     ) ORDER BY timestamp`,
+  );
+  stmtGetLastBotMessageTimestamp = db.prepare(
+    `SELECT MAX(timestamp) as ts FROM messages WHERE chat_jid = ? AND is_bot_message = 1`,
+  );
+  stmtCreateTask = db.prepare(
+    `INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, script, schedule_type, schedule_value, context_mode, next_run, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  stmtGetTaskById = db.prepare('SELECT * FROM scheduled_tasks WHERE id = ?');
+  stmtGetTasksForGroup = db.prepare(
+    'SELECT * FROM scheduled_tasks WHERE group_folder = ? ORDER BY created_at DESC',
+  );
+  stmtGetAllTasks = db.prepare(
+    'SELECT * FROM scheduled_tasks ORDER BY created_at DESC',
+  );
+  stmtGetDueTasks = db.prepare(
+    `SELECT * FROM scheduled_tasks
+     WHERE status = 'active' AND next_run IS NOT NULL AND next_run <= ?
+     ORDER BY next_run`,
+  );
+  stmtUpdateTaskAfterRun = db.prepare(
+    `UPDATE scheduled_tasks
+     SET next_run = ?, last_run = ?, last_result = ?, status = CASE WHEN ? IS NULL THEN 'completed' ELSE status END
+     WHERE id = ?`,
+  );
+  stmtLogTaskRun = db.prepare(
+    `INSERT INTO task_run_logs (task_id, run_at, duration_ms, status, result, error)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  );
+  stmtDeleteTaskLogs = db.prepare(
+    'DELETE FROM task_run_logs WHERE task_id = ?',
+  );
+  stmtDeleteTask = db.prepare(
+    'DELETE FROM scheduled_tasks WHERE id = ?',
+  );
+  stmtGetRouterState = db.prepare(
+    'SELECT value FROM router_state WHERE key = ?',
+  );
+  stmtSetRouterState = db.prepare(
+    'INSERT OR REPLACE INTO router_state (key, value) VALUES (?, ?)',
+  );
+  stmtGetSession = db.prepare(
+    'SELECT session_id FROM sessions WHERE group_folder = ?',
+  );
+  stmtSetSession = db.prepare(
+    'INSERT OR REPLACE INTO sessions (group_folder, session_id) VALUES (?, ?)',
+  );
+  stmtDeleteSession = db.prepare(
+    'DELETE FROM sessions WHERE group_folder = ?',
+  );
+  stmtCreateAgentSession = db.prepare(
+    `INSERT INTO agent_sessions (id, group_id, container_id, status, started_at, last_health_check, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  stmtGetActiveSessions = db.prepare(
+    `SELECT id, group_id, container_id, status, started_at, last_health_check, metadata
+     FROM agent_sessions
+     WHERE status = 'active'
+     ORDER BY started_at DESC`,
+  );
+  stmtGetAgentSessionMetadata = db.prepare(
+    'SELECT metadata FROM agent_sessions WHERE id = ?',
+  );
+  stmtEndAgentSession = db.prepare(
+    `UPDATE agent_sessions SET status = 'ended', metadata = ? WHERE id = ?`,
+  );
+  stmtGetAllSessions = db.prepare(
+    'SELECT group_folder, session_id FROM sessions',
+  );
+  stmtCreateMeeting = db.prepare(
+    `INSERT INTO meetings (id, chat_id, agenda, moderator, participants, turns, status, started_at)
+     VALUES (?, ?, ?, ?, ?, 0, 'active', ?)`,
+  );
+  stmtGetActiveMeetings = db.prepare(
+    `SELECT * FROM meetings WHERE status = 'active' ORDER BY started_at DESC`,
+  );
+  stmtEndMeeting = db.prepare(
+    `UPDATE meetings SET status = 'completed', ended_at = ?, summary = ? WHERE id = ?`,
+  );
+  stmtCreateProactiveMessage = db.prepare(
+    `INSERT INTO proactive_messages (chat_id, topic, content, created_at)
+     VALUES (?, ?, ?, ?)`,
+  );
+  stmtGetProactiveMessagesForGroup = db.prepare(
+    `SELECT * FROM proactive_messages WHERE chat_id = ? ORDER BY created_at DESC`,
+  );
+  stmtCreateMeetingTurn = db.prepare(
+    `INSERT INTO meeting_turns (meeting_id, agent, content, timestamp)
+     VALUES (?, ?, ?, ?)`,
+  );
+  stmtGetMeetingTurns = db.prepare(
+    `SELECT * FROM meeting_turns WHERE meeting_id = ? ORDER BY timestamp ASC`,
+  );
+  stmtGetRegisteredGroup = db.prepare(
+    'SELECT * FROM registered_groups WHERE jid = ?',
+  );
+  stmtSetRegisteredGroup = db.prepare(
+    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  stmtGetAllRegisteredGroups = db.prepare(
+    'SELECT * FROM registered_groups',
+  );
+}
+
 function createSchema(database: Database.Database): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS chats (
@@ -130,7 +331,7 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_meeting_turns_meeting ON meeting_turns(meeting_id);
   `);
 
-  // Add context_mode column if it doesn't exist (migration for existing DBs)
+  // Add context_mode column if it doesn't exist
   try {
     database.exec(
       `ALTER TABLE scheduled_tasks ADD COLUMN context_mode TEXT DEFAULT 'isolated'`,
@@ -139,14 +340,14 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
-  // Add script column if it doesn't exist (migration for existing DBs)
+  // Add script column if it doesn't exist
   try {
     database.exec(`ALTER TABLE scheduled_tasks ADD COLUMN script TEXT`);
   } catch {
     /* column already exists */
   }
 
-  // Add is_bot_message column if it doesn't exist (migration for existing DBs)
+  // Add is_bot_message column if it doesn't exist
   try {
     database.exec(
       `ALTER TABLE messages ADD COLUMN is_bot_message INTEGER DEFAULT 0`,
@@ -159,7 +360,7 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
-  // Add is_main column if it doesn't exist (migration for existing DBs)
+  // Add is_main column if it doesn't exist
   try {
     database.exec(
       `ALTER TABLE registered_groups ADD COLUMN is_main INTEGER DEFAULT 0`,
@@ -172,7 +373,7 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
-  // Add channel and is_group columns if they don't exist (migration for existing DBs)
+  // Add channel and is_group columns if they don't exist
   try {
     database.exec(`ALTER TABLE chats ADD COLUMN channel TEXT`);
     database.exec(`ALTER TABLE chats ADD COLUMN is_group INTEGER DEFAULT 0`);
@@ -187,13 +388,16 @@ function createSchema(database: Database.Database): void {
       `UPDATE chats SET channel = 'discord', is_group = 1 WHERE jid LIKE 'dc:%'`,
     );
     database.exec(
-      `UPDATE chats SET channel = 'telegram', is_group = 0 WHERE jid LIKE 'tg:%'`,
+      `UPDATE chats SET channel = 'telegram', is_group = 0 WHERE jid LIKE 'tg:%' AND jid NOT LIKE 'tg:-100%' AND channel IS NULL`,
+    );
+    database.exec(
+      `UPDATE chats SET channel = 'telegram', is_group = 1 WHERE jid LIKE 'tg:-100%' AND channel IS NULL`,
     );
   } catch {
     /* columns already exist */
   }
 
-  // Add reply context columns if they don't exist (migration for existing DBs)
+  // Add reply context columns if they don't exist
   try {
     database.exec(`ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT`);
     database.exec(
@@ -204,10 +408,10 @@ function createSchema(database: Database.Database): void {
     /* columns already exist */
   }
 
-  // Ensure agent_sessions table exists (migration for existing DBs that
-  // were created before this table was added). The CREATE TABLE IF NOT
-  // EXISTS in createSchema handles new DBs; this handles the case where
-  // an existing DB is opened and the table might be missing.
+  // Ensure agent_sessions table exists.
+  // The CREATE TABLE IF NOT EXISTS in createSchema handles new DBs;
+  // this handles the case where an existing DB is opened and the table
+  // might be missing.
   try {
     const tableExists = database
       .prepare(
@@ -240,7 +444,9 @@ export function initDatabase(): void {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
   db = new Database(dbPath);
+  db.pragma('journal_mode = WAL');
   createSchema(db);
+  initStatements();
 
   // Migrate from JSON files if they exist
   migrateJsonState();
@@ -250,6 +456,9 @@ export function initDatabase(): void {
 export function _initTestDatabase(): void {
   db = new Database(':memory:');
   createSchema(db);
+  taskCache = null;
+  stmtGetNewMessagesCache.clear();
+  initStatements();
 }
 
 /** @internal - for tests only. */
@@ -272,28 +481,9 @@ export function storeChatMetadata(
   const group = isGroup === undefined ? null : isGroup ? 1 : 0;
 
   if (name) {
-    // Update with name, preserving existing timestamp if newer
-    db.prepare(
-      `
-      INSERT INTO chats (jid, name, last_message_time, channel, is_group) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(jid) DO UPDATE SET
-        name = excluded.name,
-        last_message_time = MAX(last_message_time, excluded.last_message_time),
-        channel = COALESCE(excluded.channel, channel),
-        is_group = COALESCE(excluded.is_group, is_group)
-    `,
-    ).run(chatJid, name, timestamp, ch, group);
+    stmtStoreChatMetadataWithName.run(chatJid, name, timestamp, ch, group);
   } else {
-    // Update timestamp only, preserve existing name if any
-    db.prepare(
-      `
-      INSERT INTO chats (jid, name, last_message_time, channel, is_group) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(jid) DO UPDATE SET
-        last_message_time = MAX(last_message_time, excluded.last_message_time),
-        channel = COALESCE(excluded.channel, channel),
-        is_group = COALESCE(excluded.is_group, is_group)
-    `,
-    ).run(chatJid, chatJid, timestamp, ch, group);
+    stmtStoreChatMetadataNoName.run(chatJid, chatJid, timestamp, ch, group);
   }
 }
 
@@ -303,12 +493,7 @@ export function storeChatMetadata(
  * Used during group metadata sync.
  */
 export function updateChatName(chatJid: string, name: string): void {
-  db.prepare(
-    `
-    INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)
-    ON CONFLICT(jid) DO UPDATE SET name = excluded.name
-  `,
-  ).run(chatJid, name, new Date().toISOString());
+  stmtUpdateChatName.run(chatJid, name, new Date().toISOString());
 }
 
 export interface ChatInfo {
@@ -323,25 +508,14 @@ export interface ChatInfo {
  * Get all known chats, ordered by most recent activity.
  */
 export function getAllChats(): ChatInfo[] {
-  return db
-    .prepare(
-      `
-    SELECT jid, name, last_message_time, channel, is_group
-    FROM chats
-    ORDER BY last_message_time DESC
-  `,
-    )
-    .all() as ChatInfo[];
+  return stmtGetAllChats.all() as ChatInfo[];
 }
 
 /**
  * Get timestamp of last group metadata sync.
  */
 export function getLastGroupSync(): string | null {
-  // Store sync time in a special chat entry
-  const row = db
-    .prepare(`SELECT last_message_time FROM chats WHERE jid = '__group_sync__'`)
-    .get() as { last_message_time: string } | undefined;
+  const row = stmtGetLastGroupSync.get() as { last_message_time: string } | undefined;
   return row?.last_message_time || null;
 }
 
@@ -350,9 +524,7 @@ export function getLastGroupSync(): string | null {
  */
 export function setLastGroupSync(): void {
   const now = new Date().toISOString();
-  db.prepare(
-    `INSERT OR REPLACE INTO chats (jid, name, last_message_time) VALUES ('__group_sync__', '__group_sync__', ?)`,
-  ).run(now);
+  stmtSetLastGroupSync.run(now);
 }
 
 /**
@@ -360,9 +532,7 @@ export function setLastGroupSync(): void {
  * Only call this for registered groups where message history is needed.
  */
 export function storeMessage(msg: NewMessage): void {
-  db.prepare(
-    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, reply_to_message_id, reply_to_message_content, reply_to_sender_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
+  stmtStoreMessage.run(
     msg.id,
     msg.chat_jid,
     msg.sender,
@@ -390,9 +560,7 @@ export function storeMessageDirect(msg: {
   is_from_me: boolean;
   is_bot_message?: boolean;
 }): void {
-  db.prepare(
-    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
+  stmtStoreMessageDirect.run(
     msg.id,
     msg.chat_jid,
     msg.sender,
@@ -411,27 +579,26 @@ export function getNewMessages(
   limit: number = 200,
 ): { messages: NewMessage[]; newTimestamp: string } {
   if (jids.length === 0) return { messages: [], newTimestamp: lastTimestamp };
-
   const placeholders = jids.map(() => '?').join(',');
-  // Filter bot messages using both the is_bot_message flag AND the content
-  // prefix as a backstop for messages written before the migration ran.
-  // Subquery takes the N most recent, outer query re-sorts chronologically.
-  const sql = `
-    SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me,
-             reply_to_message_id, reply_to_message_content, reply_to_sender_name
-      FROM messages
-      WHERE timestamp > ? AND chat_jid IN (${placeholders})
-        AND is_bot_message = 0 AND content NOT LIKE ?
-        AND content != '' AND content IS NOT NULL
-      ORDER BY timestamp DESC
-      LIMIT ?
-    ) ORDER BY timestamp
-  `;
+  // Cache statement by placeholder count (varies with number of groups)
+  let stmt = stmtGetNewMessagesCache.get(placeholders);
+  if (!stmt) {
+    stmt = db.prepare(`
+      SELECT * FROM (
+        SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me,
+               reply_to_message_id, reply_to_message_content, reply_to_sender_name
+        FROM messages
+        WHERE timestamp > ? AND chat_jid IN (${placeholders})
+          AND is_bot_message = 0
+          AND content != '' AND content IS NOT NULL
+        ORDER BY timestamp DESC
+        LIMIT ?
+      ) ORDER BY timestamp
+    `);
+    stmtGetNewMessagesCache.set(placeholders, stmt);
+  }
 
-  const rows = db
-    .prepare(sql)
-    .all(lastTimestamp, ...jids, `${botPrefix}:%`, limit) as NewMessage[];
+  const rows = stmt.all(lastTimestamp, ...jids, limit) as NewMessage[];
 
   let newTimestamp = lastTimestamp;
   for (const row of rows) {
@@ -447,48 +614,21 @@ export function getMessagesSince(
   botPrefix: string,
   limit: number = 200,
 ): NewMessage[] {
-  // Filter bot messages using both the is_bot_message flag AND the content
-  // prefix as a backstop for messages written before the migration ran.
-  // Subquery takes the N most recent, outer query re-sorts chronologically.
-  const sql = `
-    SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me,
-             reply_to_message_id, reply_to_message_content, reply_to_sender_name
-      FROM messages
-      WHERE chat_jid = ? AND timestamp > ?
-        AND is_bot_message = 0 AND content NOT LIKE ?
-        AND content != '' AND content IS NOT NULL
-      ORDER BY timestamp DESC
-      LIMIT ?
-    ) ORDER BY timestamp
-  `;
-  return db
-    .prepare(sql)
-    .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as NewMessage[];
+  return stmtGetMessagesSince.all(chatJid, sinceTimestamp, limit) as NewMessage[];
 }
 
 export function getLastBotMessageTimestamp(
   chatJid: string,
   botPrefix: string,
 ): string | undefined {
-  const row = db
-    .prepare(
-      `SELECT MAX(timestamp) as ts FROM messages
-       WHERE chat_jid = ? AND (is_bot_message = 1 OR content LIKE ?)`,
-    )
-    .get(chatJid, `${botPrefix}:%`) as { ts: string | null } | undefined;
+  const row = stmtGetLastBotMessageTimestamp.get(chatJid) as { ts: string | null } | undefined;
   return row?.ts ?? undefined;
 }
 
 export function createTask(
   task: Omit<ScheduledTask, 'last_run' | 'last_result'>,
 ): void {
-  db.prepare(
-    `
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, script, schedule_type, schedule_value, context_mode, next_run, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `,
-  ).run(
+  stmtCreateTask.run(
     task.id,
     task.group_folder,
     task.chat_jid,
@@ -501,26 +641,28 @@ export function createTask(
     task.status,
     task.created_at,
   );
+  invalidateTaskCache();
 }
 
 export function getTaskById(id: string): ScheduledTask | undefined {
-  return db.prepare('SELECT * FROM scheduled_tasks WHERE id = ?').get(id) as
-    | ScheduledTask
-    | undefined;
+  return stmtGetTaskById.get(id) as ScheduledTask | undefined;
 }
 
 export function getTasksForGroup(groupFolder: string): ScheduledTask[] {
-  return db
-    .prepare(
-      'SELECT * FROM scheduled_tasks WHERE group_folder = ? ORDER BY created_at DESC',
-    )
-    .all(groupFolder) as ScheduledTask[];
+  return stmtGetTasksForGroup.all(groupFolder) as ScheduledTask[];
+}
+
+// --- Task cache ---
+let taskCache: ScheduledTask[] | null = null;
+
+function invalidateTaskCache(): void {
+  taskCache = null;
 }
 
 export function getAllTasks(): ScheduledTask[] {
-  return db
-    .prepare('SELECT * FROM scheduled_tasks ORDER BY created_at DESC')
-    .all() as ScheduledTask[];
+  if (taskCache !== null) return taskCache;
+  taskCache = stmtGetAllTasks.all() as ScheduledTask[];
+  return taskCache;
 }
 
 export function updateTask(
@@ -571,25 +713,19 @@ export function updateTask(
   db.prepare(
     `UPDATE scheduled_tasks SET ${fields.join(', ')} WHERE id = ?`,
   ).run(...values);
+  invalidateTaskCache();
 }
 
 export function deleteTask(id: string): void {
   // Delete child records first (FK constraint)
-  db.prepare('DELETE FROM task_run_logs WHERE task_id = ?').run(id);
-  db.prepare('DELETE FROM scheduled_tasks WHERE id = ?').run(id);
+  stmtDeleteTaskLogs.run(id);
+  stmtDeleteTask.run(id);
+  invalidateTaskCache();
 }
 
 export function getDueTasks(): ScheduledTask[] {
   const now = new Date().toISOString();
-  return db
-    .prepare(
-      `
-    SELECT * FROM scheduled_tasks
-    WHERE status = 'active' AND next_run IS NOT NULL AND next_run <= ?
-    ORDER BY next_run
-  `,
-    )
-    .all(now) as ScheduledTask[];
+  return stmtGetDueTasks.all(now) as ScheduledTask[];
 }
 
 export function updateTaskAfterRun(
@@ -598,22 +734,12 @@ export function updateTaskAfterRun(
   lastResult: string,
 ): void {
   const now = new Date().toISOString();
-  db.prepare(
-    `
-    UPDATE scheduled_tasks
-    SET next_run = ?, last_run = ?, last_result = ?, status = CASE WHEN ? IS NULL THEN 'completed' ELSE status END
-    WHERE id = ?
-  `,
-  ).run(nextRun, now, lastResult, nextRun, id);
+  stmtUpdateTaskAfterRun.run(nextRun, now, lastResult, nextRun, id);
+  invalidateTaskCache();
 }
 
 export function logTaskRun(log: TaskRunLog): void {
-  db.prepare(
-    `
-    INSERT INTO task_run_logs (task_id, run_at, duration_ms, status, result, error)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `,
-  ).run(
+  stmtLogTaskRun.run(
     log.task_id,
     log.run_at,
     log.duration_ms,
@@ -626,35 +752,27 @@ export function logTaskRun(log: TaskRunLog): void {
 // --- Router state accessors ---
 
 export function getRouterState(key: string): string | undefined {
-  const row = db
-    .prepare('SELECT value FROM router_state WHERE key = ?')
-    .get(key) as { value: string } | undefined;
+  const row = stmtGetRouterState.get(key) as { value: string } | undefined;
   return row?.value;
 }
 
 export function setRouterState(key: string, value: string): void {
-  db.prepare(
-    'INSERT OR REPLACE INTO router_state (key, value) VALUES (?, ?)',
-  ).run(key, value);
+  stmtSetRouterState.run(key, value);
 }
 
 // --- Session accessors ---
 
 export function getSession(groupFolder: string): string | undefined {
-  const row = db
-    .prepare('SELECT session_id FROM sessions WHERE group_folder = ?')
-    .get(groupFolder) as { session_id: string } | undefined;
+  const row = stmtGetSession.get(groupFolder) as { session_id: string } | undefined;
   return row?.session_id;
 }
 
 export function setSession(groupFolder: string, sessionId: string): void {
-  db.prepare(
-    'INSERT OR REPLACE INTO sessions (group_folder, session_id) VALUES (?, ?)',
-  ).run(groupFolder, sessionId);
+  stmtSetSession.run(groupFolder, sessionId);
 }
 
 export function deleteSession(groupFolder: string): void {
-  db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(groupFolder);
+  stmtDeleteSession.run(groupFolder);
 }
 
 // --- Agent session accessors ---
@@ -710,10 +828,7 @@ export function createAgentSession(session: {
   metadata?: Record<string, unknown>;
 }): void {
   const now = new Date().toISOString();
-  db.prepare(
-    `INSERT INTO agent_sessions (id, group_id, container_id, status, started_at, last_health_check, metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
+  stmtCreateAgentSession.run(
     session.id,
     session.group_id,
     session.container_id ?? null,
@@ -770,14 +885,7 @@ export function updateAgentSession(
  * Used by HealthChecker to determine which containers to monitor.
  */
 export function getActiveSessions(): AgentSession[] {
-  return db
-    .prepare(
-      `SELECT id, group_id, container_id, status, started_at, last_health_check, metadata
-       FROM agent_sessions
-       WHERE status = 'active'
-       ORDER BY started_at DESC`,
-    )
-    .all() as AgentSession[];
+  return stmtGetActiveSessions.all() as AgentSession[];
 }
 
 /**
@@ -785,30 +893,17 @@ export function getActiveSessions(): AgentSession[] {
  * Records the end time in metadata.
  */
 export function endAgentSession(id: string): void {
-  // Read existing metadata to preserve it
-  const row = db
-    .prepare('SELECT metadata FROM agent_sessions WHERE id = ?')
-    .get(id) as { metadata: string | null } | undefined;
-
-  let metadata: Record<string, unknown> = {};
-  if (row?.metadata) {
-    try {
-      metadata = JSON.parse(row.metadata);
-    } catch {
-      // corrupted metadata, start fresh
-    }
-  }
-  metadata.ended_at = new Date().toISOString();
-
+  // Single UPDATE using json_set to avoid SELECT + parse + UPDATE roundtrip
+  const now = new Date().toISOString();
   db.prepare(
-    `UPDATE agent_sessions SET status = 'ended', metadata = ? WHERE id = ?`,
-  ).run(JSON.stringify(metadata), id);
+    `UPDATE agent_sessions SET status = 'ended',
+       metadata = json_set(COALESCE(metadata, '{}'), '$.ended_at', ?)
+     WHERE id = ?`,
+  ).run(now, id);
 }
 
 export function getAllSessions(): Record<string, string> {
-  const rows = db
-    .prepare('SELECT group_folder, session_id FROM sessions')
-    .all() as Array<{ group_folder: string; session_id: string }>;
+  const rows = stmtGetAllSessions.all() as Array<{ group_folder: string; session_id: string }>;
   const result: Record<string, string> = {};
   for (const row of rows) {
     result[row.group_folder] = row.session_id;
@@ -829,10 +924,7 @@ export function createMeeting(meeting: {
   participants: string[];
 }): void {
   const now = new Date().toISOString();
-  db.prepare(
-    `INSERT INTO meetings (id, chat_id, agenda, moderator, participants, turns, status, started_at)
-     VALUES (?, ?, ?, ?, ?, 0, 'active', ?)`,
-  ).run(
+  stmtCreateMeeting.run(
     meeting.id,
     meeting.chat_id,
     meeting.agenda,
@@ -886,11 +978,7 @@ export function updateMeeting(
  * Get all active meetings (status = 'active').
  */
 export function getActiveMeetings(): Meeting[] {
-  return db
-    .prepare(
-      `SELECT * FROM meetings WHERE status = 'active' ORDER BY started_at DESC`,
-    )
-    .all() as Meeting[];
+  return stmtGetActiveMeetings.all() as Meeting[];
 }
 
 /**
@@ -898,9 +986,7 @@ export function getActiveMeetings(): Meeting[] {
  */
 export function endMeeting(id: string, summary?: string): void {
   const now = new Date().toISOString();
-  db.prepare(
-    `UPDATE meetings SET status = 'completed', ended_at = ?, summary = ? WHERE id = ?`,
-  ).run(now, summary ?? null, id);
+  stmtEndMeeting.run(now, summary ?? null, id);
 }
 
 // --- Proactive message accessors ---
@@ -914,12 +1000,7 @@ export function createProactiveMessage(msg: {
   content: string;
 }): number {
   const now = new Date().toISOString();
-  const result = db
-    .prepare(
-      `INSERT INTO proactive_messages (chat_id, topic, content, created_at)
-     VALUES (?, ?, ?, ?)`,
-    )
-    .run(msg.chat_id, msg.topic, msg.content, now);
+  const result = stmtCreateProactiveMessage.run(msg.chat_id, msg.topic, msg.content, now);
   return result.lastInsertRowid as number;
 }
 
@@ -929,11 +1010,7 @@ export function createProactiveMessage(msg: {
 export function getProactiveMessagesForGroup(
   chatId: string,
 ): ProactiveMessage[] {
-  return db
-    .prepare(
-      `SELECT * FROM proactive_messages WHERE chat_id = ? ORDER BY created_at DESC`,
-    )
-    .all(chatId) as ProactiveMessage[];
+  return stmtGetProactiveMessagesForGroup.all(chatId) as ProactiveMessage[];
 }
 
 // --- Meeting turn accessors ---
@@ -947,12 +1024,7 @@ export function createMeetingTurn(turn: {
   content: string;
 }): number {
   const now = new Date().toISOString();
-  const result = db
-    .prepare(
-      `INSERT INTO meeting_turns (meeting_id, agent, content, timestamp)
-     VALUES (?, ?, ?, ?)`,
-    )
-    .run(turn.meeting_id, turn.agent, turn.content, now);
+  const result = stmtCreateMeetingTurn.run(turn.meeting_id, turn.agent, turn.content, now);
   return result.lastInsertRowid as number;
 }
 
@@ -960,11 +1032,7 @@ export function createMeetingTurn(turn: {
  * Get all turns for a specific meeting.
  */
 export function getMeetingTurns(meetingId: string): MeetingTurn[] {
-  return db
-    .prepare(
-      `SELECT * FROM meeting_turns WHERE meeting_id = ? ORDER BY timestamp ASC`,
-    )
-    .all(meetingId) as MeetingTurn[];
+  return stmtGetMeetingTurns.all(meetingId) as MeetingTurn[];
 }
 
 // --- Registered group accessors ---
@@ -972,9 +1040,7 @@ export function getMeetingTurns(meetingId: string): MeetingTurn[] {
 export function getRegisteredGroup(
   jid: string,
 ): (RegisteredGroup & { jid: string }) | undefined {
-  const row = db
-    .prepare('SELECT * FROM registered_groups WHERE jid = ?')
-    .get(jid) as
+  const row = stmtGetRegisteredGroup.get(jid) as
     | {
         jid: string;
         name: string;
@@ -1013,10 +1079,7 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
   if (!isValidGroupFolder(group.folder)) {
     throw new Error(`Invalid group folder "${group.folder}" for JID ${jid}`);
   }
-  db.prepare(
-    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
+  stmtSetRegisteredGroup.run(
     jid,
     group.name,
     group.folder,
@@ -1029,7 +1092,7 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
 }
 
 export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
-  const rows = db.prepare('SELECT * FROM registered_groups').all() as Array<{
+  const rows = stmtGetAllRegisteredGroups.all() as Array<{
     jid: string;
     name: string;
     folder: string;
@@ -1125,3 +1188,4 @@ function migrateJsonState(): void {
     }
   }
 }
+

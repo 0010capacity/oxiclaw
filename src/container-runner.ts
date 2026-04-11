@@ -11,10 +11,10 @@ import {
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
   DATA_DIR,
-  GROUPS_DIR,
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
+import { buildVolumeMounts, type VolumeMount } from './container-mounts.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -23,7 +23,6 @@ import {
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
-import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
 // JSON-RPC 2.0 protocol types for container IPC
@@ -70,215 +69,6 @@ export interface ContainerOutput {
   newSessionId?: string;
   error?: string;
   images?: string[]; // base64-encoded images returned by the agent
-}
-
-interface VolumeMount {
-  hostPath: string;
-  containerPath: string;
-  readonly: boolean;
-}
-
-function buildVolumeMounts(
-  group: RegisteredGroup,
-  isMain: boolean,
-): VolumeMount[] {
-  const mounts: VolumeMount[] = [];
-  const projectRoot = process.cwd();
-  const groupDir = resolveGroupFolderPath(group.folder);
-
-  if (isMain) {
-    // Main gets the project root read-only. Writable paths the agent needs
-    // (store, group folder, IPC, .claude/) are mounted separately below.
-    // Read-only prevents the agent from modifying host application code
-    // (src/, dist/, package.json, etc.) which would bypass the sandbox
-    // entirely on next restart.
-    mounts.push({
-      hostPath: projectRoot,
-      containerPath: '/workspace/project',
-      readonly: true,
-    });
-
-    // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // pi-mono SDK reads credentials from /workspace/group/.pi/agent/ auth.json mount.
-    // Host .env is shadowed to /dev/null.
-    const envFile = path.join(projectRoot, '.env');
-    if (fs.existsSync(envFile)) {
-      mounts.push({
-        hostPath: '/dev/null',
-        containerPath: '/workspace/project/.env',
-        readonly: true,
-      });
-    }
-
-    // Main gets writable access to the store (SQLite DB) so it can
-    // query and write to the database directly.
-    const storeDir = path.join(projectRoot, 'store');
-    mounts.push({
-      hostPath: storeDir,
-      containerPath: '/workspace/project/store',
-      readonly: false,
-    });
-
-    // Main also gets its group folder as the working directory
-    mounts.push({
-      hostPath: groupDir,
-      containerPath: '/workspace/group',
-      readonly: false,
-    });
-
-    // Global memory directory — writable for main so it can update shared context
-    const globalDir = path.join(GROUPS_DIR, 'global');
-    if (fs.existsSync(globalDir)) {
-      mounts.push({
-        hostPath: globalDir,
-        containerPath: '/workspace/global',
-        readonly: false,
-      });
-    }
-  } else {
-    // Other groups only get their own folder
-    mounts.push({
-      hostPath: groupDir,
-      containerPath: '/workspace/group',
-      readonly: false,
-    });
-
-    // Global memory directory (read-only for non-main)
-    // Only directory mounts are supported, not file mounts
-    const globalDir = path.join(GROUPS_DIR, 'global');
-    if (fs.existsSync(globalDir)) {
-      mounts.push({
-        hostPath: globalDir,
-        containerPath: '/workspace/global',
-        readonly: true,
-      });
-    }
-  }
-
-  // Per-group pi-mono sessions directory (isolated from other groups)
-  // Each group gets their own .pi/ to prevent cross-group session access
-  const groupSessionsDir = path.join(DATA_DIR, 'sessions', group.folder, '.pi');
-  fs.mkdirSync(groupSessionsDir, { recursive: true });
-  const settingsFile = path.join(groupSessionsDir, 'settings.json');
-  if (!fs.existsSync(settingsFile)) {
-    fs.writeFileSync(
-      settingsFile,
-      JSON.stringify(
-        {
-          extensions: ['/workspace/group/extensions'],
-          env: {
-            // pi-mono SDK settings
-            PI_ENABLE_AUTO_MEMORY: '1',
-          },
-        },
-        null,
-        2,
-      ) + '\n',
-    );
-  }
-
-  // Sync skills from container/skills/ into each group's .pi/skills/
-  const skillsSrc = path.join(process.cwd(), 'container', 'skills');
-  const skillsDst = path.join(groupSessionsDir, 'skills');
-  if (fs.existsSync(skillsSrc)) {
-    for (const skillDir of fs.readdirSync(skillsSrc)) {
-      const srcDir = path.join(skillsSrc, skillDir);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, skillDir);
-      fs.cpSync(srcDir, dstDir, { recursive: true });
-    }
-  }
-  // Mount at /home/node/.pi/agent so the SDK finds:
-  // - skills at /home/node/.pi/agent/skills/  (user-level, from getAgentDir()/skills)
-  // - settings at /home/node/.pi/agent/settings.json (from getSettingsPath())
-  // This also allows project-level skills at /workspace/group/.pi/skills/
-  mounts.push({
-    hostPath: groupSessionsDir,
-    containerPath: '/home/node/.pi/agent',
-    readonly: false,
-  });
-
-  // Per-group IPC namespace: each group gets its own IPC directory
-  // This prevents cross-group privilege escalation via IPC
-  const groupIpcDir = resolveGroupIpcPath(group.folder);
-  fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
-  mounts.push({
-    hostPath: groupIpcDir,
-    containerPath: '/workspace/ipc',
-    readonly: false,
-  });
-
-  // Copy agent-runner source into a per-group writable location so agents
-  // can customize it (add tools, change behavior) without affecting other
-  // groups. Recompiled on container startup via entrypoint.sh.
-  const agentRunnerSrc = path.join(
-    projectRoot,
-    'container',
-    'agent-runner',
-    'src',
-  );
-  const groupAgentRunnerDir = path.join(
-    DATA_DIR,
-    'sessions',
-    group.folder,
-    'agent-runner-src',
-  );
-  if (fs.existsSync(agentRunnerSrc)) {
-    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
-    const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
-    const needsCopy =
-      !fs.existsSync(groupAgentRunnerDir) ||
-      !fs.existsSync(cachedIndex) ||
-      (fs.existsSync(srcIndex) &&
-        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
-    if (needsCopy) {
-      fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
-    }
-  }
-  mounts.push({
-    hostPath: groupAgentRunnerDir,
-    containerPath: '/app/src',
-    readonly: false,
-  });
-
-  // Additional mounts validated against external allowlist (tamper-proof from containers)
-  if (group.containerConfig?.additionalMounts) {
-    const validatedMounts = validateAdditionalMounts(
-      group.containerConfig.additionalMounts,
-      group.name,
-      isMain,
-    );
-    mounts.push(...validatedMounts);
-  }
-
-  // Per-group .pi/agent directory for pi-mono SDK credentials and models
-  // SDK reads auth.json and models.json from getAgentDir() = XDG_CONFIG_HOME/pi/agent
-  const agentDir = path.join(
-    DATA_DIR,
-    'credentials',
-    group.folder,
-    '.pi',
-    'agent',
-  );
-  const authFile = path.join(agentDir, 'auth.json');
-  const modelsFile = path.join(agentDir, 'models.json');
-  fs.mkdirSync(agentDir, { recursive: true });
-  if (!fs.existsSync(authFile)) {
-    fs.writeFileSync(authFile, '{}', 'utf-8');
-  }
-  if (!fs.existsSync(modelsFile)) {
-    // Create empty models.json so SDK doesn't complain
-    fs.writeFileSync(modelsFile, '{"providers":{}}', 'utf-8');
-  }
-  mounts.push({
-    hostPath: agentDir,
-    containerPath: '/workspace/group/pi/agent',
-    readonly: false,
-  });
-
-  return mounts;
 }
 
 async function buildContainerArgs(
@@ -334,7 +124,7 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = buildVolumeMounts(group, input.isMain);
+  const mounts = buildVolumeMounts(process.cwd(), group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `oxiclaw-${safeName}-${Date.now()}`;
   const containerArgs = await buildContainerArgs(mounts, containerName);
@@ -475,7 +265,7 @@ export async function runContainerAgent(
 
       // Stream-parse JSON-RPC responses (line-delimited)
       const chunkStr = chunk.toString();
-      logger.info({ group: group.name, chunkLen: chunkStr.length, preview: chunkStr.slice(0, 300) }, 'Container stdout CHUNK');
+      logger.debug({ group: group.name, chunkLen: chunkStr.length, preview: chunkStr.slice(0, 300) }, 'Container stdout CHUNK');
       lineBuffer += chunkStr;
       const lines = lineBuffer.split('\n');
       // Keep the last (potentially incomplete) line in the buffer
@@ -484,7 +274,7 @@ export async function runContainerAgent(
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed) continue;
-        logger.info({ group: group.name, line: trimmed.slice(0, 200) }, 'Container parsed LINE');
+        logger.debug({ group: group.name, line: trimmed.slice(0, 200) }, 'Container parsed LINE');
 
         try {
           const msg = JSON.parse(trimmed) as
@@ -557,7 +347,7 @@ export async function runContainerAgent(
                   newSessionId: result?.session_id,
                   images: result?.images,
                 };
-                logger.info({ group: group.name, contentLen: output.result?.length, hasOutput: !!output.result }, 'Calling onOutput with success');
+                logger.debug({ group: group.name, contentLen: output.result?.length, hasOutput: !!output.result }, 'Calling onOutput with success');
                 hadStreamingOutput = true;
                 resetTimeout();
                 if (onOutput) {

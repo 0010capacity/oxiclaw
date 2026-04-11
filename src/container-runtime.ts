@@ -30,7 +30,7 @@ export function getRuntimeBin(): string {
   return 'docker';
 }
 
-/** The container runtime binary name (legacy alias, use getRuntimeBin()). */
+/** The container runtime binary name. */
 export const CONTAINER_RUNTIME_BIN = getRuntimeBin();
 
 /** CLI args needed for the container to resolve the host gateway. */
