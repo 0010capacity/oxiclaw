@@ -9,7 +9,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@mariozechner/pi-coding-agent": "git+ssh://git@github.com:badlogic/pi-mono",
+    "@mariozechner/pi-coding-agent": "^0.66.1",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "cron-parser": "^5.0.0",
     "pi-monorepo": "github:badlogic/pi-mono#main",

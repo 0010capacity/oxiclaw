@@ -47,7 +47,8 @@ export async function run(_args: string[]): Promise<void> {
   if (fs.existsSync(authJsonPath)) {
     try {
       const auth = JSON.parse(fs.readFileSync(authJsonPath, 'utf-8'));
-      hasAuth = !!auth.providers?.anthropic?.api_key;
+      // pi-mono SDK AuthStorage format: { "provider": { type: "api_key", key: "..." } }
+    hasAuth = !!(auth.anthropic && (auth.anthropic as any).key);
     } catch { /* invalid JSON */ }
   }
 

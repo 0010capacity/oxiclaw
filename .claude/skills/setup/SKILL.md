@@ -130,27 +130,36 @@ Run `npx tsx setup/index.ts --step container -- --runtime <chosen>` and parse th
 
 **If TEST_OK=false but BUILD_OK=true:** The image built but won't run. Check logs — common cause is runtime not fully started. Wait a moment and retry the test.
 
-## 4. Credentials (pi-mono SDK)
+## 4. Provider Selection & Credentials (pi-mono SDK)
 
-The pi-mono SDK reads credentials from per-group `auth.json` files mounted into containers.
+**First, ask the user which LLM provider they want to use:**
 
-Credentials are stored at `data/credentials/{group}/.pi/agent/`. Each group has its own credentials — the `main` group is configured first, additional groups can be configured later.
+AskUserQuestion: "Which LLM provider would you like to use?"
+- **Anthropic (Claude)** — "Uses `sk-ant-` API keys."
+- **OpenAI (GPT)** — "Uses `sk-` API keys."
+- **ZAI** — "Chinese AI coding platform. Uses ZAI_API_KEY."
+- **Custom** — "Bring your own API-compatible provider."
 
-pi-mono SDK supports Anthropic API keys only. If the user doesn't have one, direct them to https://console.anthropic.com/settings/keys.
+**Then, based on their selection, ask for credentials:**
 
-Ask: "Paste your Anthropic API key (starts with `sk-ant-`)."
+| Provider | Ask for | Validation |
+|----------|---------|------------|
+| Anthropic | API key (starts with `sk-ant-`) | Must start with `sk-ant-` |
+| OpenAI | API key (starts with `sk-`) | Must start with `sk-` |
+| Custom | API key + Base URL | No prefix validation |
 
-**If the user's response contains a key starting with `sk-ant-`:** Use that key directly.
+**Supported providers:** `anthropic`, `openai`, `custom`
 
-Run: `npx tsx setup/index.ts --step credentials -- --api-key <key>`
-
-If the key doesn't start with `sk-ant-`, report an error and ask again.
+Run the credentials step with the selected provider and API key:
+```bash
+npx tsx setup/index.ts --step credentials -- --provider <provider> --api-key <key> [--base-url <url>]
+```
 
 ### After configuration
 
 Verify the auth.json was written:
 ```bash
-cat data/credentials/main/.pi/agent/auth.json | grep -q anthropic && echo "OK"
+cat data/credentials/main/.pi/agent/auth.json
 ```
 
 If not configured, re-run the credentials step with the correct values.

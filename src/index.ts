@@ -301,6 +301,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
+    logger.info({ group: group.name, resultStatus: result.status, resultLen: result.result?.length }, 'onOutput callback FIRED');
     if (result.result) {
       const raw =
         typeof result.result === 'string'

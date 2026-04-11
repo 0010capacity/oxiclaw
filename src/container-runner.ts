@@ -365,7 +365,7 @@ export async function runContainerAgent(
   const logsDir = path.join(groupDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
 
-  return new Promise((resolve) => {
+  return new Promise(async (resolve) => {
     const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -402,17 +402,58 @@ export async function runContainerAgent(
     };
 
     // Send init then prompt as line-delimited JSON-RPC
+    // IMPORTANT: Wait for init response before sending prompt to avoid race condition
     container.stdin.write(JSON.stringify(initRequest) + '\n');
+
+    // Variables for init handling - must be declared before the Promise
+    let initLineBuffer = '';
+    let initResolved = false;
+    let newSessionId: string | undefined;
+
+    // Wait for init response before sending prompt
+    const initPromise = new Promise<void>((resolveInit) => {
+      const checkInit = (data: Buffer) => {
+        const chunk = data.toString();
+        stdout += chunk;
+        initLineBuffer += chunk;
+        const lines = initLineBuffer.split('\n');
+        initLineBuffer = lines.pop() || '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const msg = JSON.parse(trimmed);
+            if ('id' in msg && msg.id === initRequest.id && !initResolved) {
+              initResolved = true;
+              const result = msg.result as { session_id?: string } | undefined;
+              if (result?.session_id) {
+                newSessionId = result.session_id;
+              }
+              if (msg.error) {
+                logger.error({ group: group.name, error: msg.error }, 'Container init RPC failed');
+              } else {
+                logger.debug({ group: group.name, sessionId: newSessionId }, 'Container init RPC succeeded');
+              }
+              resolveInit();
+            }
+          } catch {}
+        }
+      };
+      container.stdout.on('data', checkInit);
+    });
+
+    await initPromise;
+
+    // Now send prompt after init has completed
     container.stdin.write(JSON.stringify(promptRequest) + '\n');
     container.stdin.end();
 
     // Streaming output: parse JSON-RPC 2.0 responses from line-delimited stdout
     let lineBuffer = '';
-    let newSessionId: string | undefined;
     let outputChain = Promise.resolve();
 
     // Track which RPC IDs we've sent so we can match responses
-    const pendingRpcIds = new Set([initRequest.id, promptRequest.id]);
+    const pendingRpcIds = new Set([promptRequest.id]);
 
     container.stdout.on('data', (data) => {
       const chunk = data.toString();
@@ -433,7 +474,9 @@ export async function runContainerAgent(
       }
 
       // Stream-parse JSON-RPC responses (line-delimited)
-      lineBuffer += chunk;
+      const chunkStr = chunk.toString();
+      logger.info({ group: group.name, chunkLen: chunkStr.length, preview: chunkStr.slice(0, 300) }, 'Container stdout CHUNK');
+      lineBuffer += chunkStr;
       const lines = lineBuffer.split('\n');
       // Keep the last (potentially incomplete) line in the buffer
       lineBuffer = lines.pop() || '';
@@ -441,6 +484,7 @@ export async function runContainerAgent(
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed) continue;
+        logger.info({ group: group.name, line: trimmed.slice(0, 200) }, 'Container parsed LINE');
 
         try {
           const msg = JSON.parse(trimmed) as
@@ -485,7 +529,10 @@ export async function runContainerAgent(
                 hadStreamingOutput = true;
                 resetTimeout();
                 if (onOutput) {
-                  outputChain = outputChain.then(() => onOutput(output));
+                  outputChain = outputChain.then(() => onOutput(output)).catch((err) => {
+                    logger.error({ group: group.name, err }, 'onOutput callback failed');
+                    throw err;
+                  });
                 }
               } else {
                 const result = msg.result as
@@ -510,10 +557,14 @@ export async function runContainerAgent(
                   newSessionId: result?.session_id,
                   images: result?.images,
                 };
+                logger.info({ group: group.name, contentLen: output.result?.length, hasOutput: !!output.result }, 'Calling onOutput with success');
                 hadStreamingOutput = true;
                 resetTimeout();
                 if (onOutput) {
-                  outputChain = outputChain.then(() => onOutput(output));
+                  outputChain = outputChain.then(() => onOutput(output)).catch((err) => {
+                    logger.error({ group: group.name, err }, 'onOutput callback failed');
+                    throw err;
+                  });
                 }
               }
               pendingRpcIds.delete(msg.id as number);
@@ -738,7 +789,7 @@ export async function runContainerAgent(
 
       // Streaming mode: wait for output chain to settle, return completion marker
       if (onOutput) {
-        outputChain.then(() => {
+        return outputChain.then(() => {
           logger.info(
             { group: group.name, duration, newSessionId },
             'Container completed (streaming mode)',
@@ -749,7 +800,6 @@ export async function runContainerAgent(
             newSessionId,
           });
         });
-        return;
       }
 
       // Non-streaming mode: parse the JSON-RPC prompt response from accumulated stdout

@@ -368,10 +368,12 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
       }
       const chatId = extractChatId(jid);
 
+      logger.info({ jid, chatId, textLen: text.length }, 'Telegram sendMessage START');
       try {
-        await bot.telegram.sendMessage(chatId, text);
+        await bot.telegram.sendMessage(chatId, sanitizeHtmlForTelegram(text));
+        logger.info({ jid, chatId }, 'Telegram sendMessage SUCCESS');
       } catch (err) {
-        logger.error({ jid, err }, 'Failed to send Telegram message');
+        logger.error({ jid, chatId, err }, 'Telegram sendMessage FAILED');
         throw err;
       }
     },

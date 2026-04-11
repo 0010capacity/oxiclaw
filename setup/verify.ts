@@ -110,7 +110,8 @@ export async function run(_args: string[]): Promise<void> {
   if (fs.existsSync(authJsonPath)) {
     try {
       const auth = JSON.parse(fs.readFileSync(authJsonPath, 'utf-8'));
-      if (auth.providers?.anthropic?.api_key) {
+      // Check both old format and new pi-mono format
+      if (auth.providers?.anthropic?.api_key || (auth.anthropic && (auth as any).key)) {
         credentials = 'configured';
       }
     } catch {

@@ -30,9 +30,6 @@ RUN apt-get update && apt-get install -y \
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Install agent-browser and pi-coding-agent globally
-RUN npm install -g agent-browser @mariozechner/pi-coding-agent
-
 # Create app directory
 WORKDIR /app
 
@@ -45,8 +42,8 @@ RUN npm install
 # Copy source code
 COPY agent-runner/ ./
 
-# Build TypeScript
-RUN npm run build
+# Build TypeScript (use npx to resolve from local node_modules)
+RUN npx tsc
 
 # Create workspace directories
 RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/group/extensions /workspace/ipc/messages /workspace/ipc/tasks /workspace/ipc/input

@@ -7,7 +7,7 @@
  * - Unix socket: JSON-RPC 2.0 events (session.events, tool results)
  */
 
-import { createAgentSession, createCodingTools } from '@mariozechner/pi-coding-agent';
+import { createAgentSession, createCodingTools, FileAuthStorageBackend, AuthStorage } from '@mariozechner/pi-coding-agent';
 import { IPCBridge } from './ipc-bridge.js';
 import fs from 'fs';
 import os from 'os';
@@ -82,8 +82,21 @@ async function handlePromptRequest(params: Record<string, unknown>): Promise<Pro
 
     // Capture final result from agent_end
     if (event.type === 'agent_end') {
-      const endEvent = event as { type: 'agent_end'; messages: Array<ContentBlock & { content?: string; tool_calls?: Array<{ name: string; params: Record<string, unknown> }> }> };
-      finalContent = (endEvent.messages[endEvent.messages.length - 1] as ContentBlock & { content?: string })?.content || '';
+      const endEvent = event as { type: 'agent_end'; messages: Array<ContentBlock & { content?: string | unknown[]; tool_calls?: Array<{ name: string; params: Record<string, unknown> }> }> };
+      // lastMessage can contain a content array (from newer models) or a single text string
+      const lastMessage = endEvent.messages[endEvent.messages.length - 1] as ContentBlock & { content?: string | unknown[] };
+      const rawContent = lastMessage?.content;
+
+      if (typeof rawContent === 'string') {
+        finalContent = rawContent;
+      } else if (Array.isArray(rawContent)) {
+        // Content is an array of content blocks - extract text from each text block
+        // Filter out 'thinking' blocks, keep only 'text' blocks with actual response
+        const textBlocks = (rawContent as Array<{ type: string; text?: string }>)
+          .filter(b => b.type === 'text' && b.text)
+          .map(b => b.text as string);
+        finalContent = textBlocks.join('\n');
+      }
       for (const msg of endEvent.messages) {
         if (msg.tool_calls) {
           toolCalls.push(...msg.tool_calls);
@@ -122,11 +135,13 @@ async function handleInitRequest(_params: Record<string, unknown>): Promise<void
   const tools = createCodingTools(CWD) as any;
 
   // Create agent session with pi-mono SDK
-  // SDK reads credentials from ~/.pi/agent/auth.json and models from ~/.pi/agent/models.json
+  // SDK reads credentials from XDG_CONFIG_HOME/pi/agent/auth.json and models from XDG_CONFIG_HOME/pi/agent/models.json
   // These are mounted by the orchestrator before container start
+  const authStorage = AuthStorage.create('/workspace/group/pi/agent/auth.json');
   const { session } = await createAgentSession({
     cwd: CWD,
     tools,
+    authStorage,
   });
 
   currentSession = session as unknown as AgentSession;
@@ -184,16 +199,17 @@ async function readStdinRequests(): Promise<void> {
     }
   });
 
-  process.stdin.on('end', () => {
+  process.stdin.on('end', async () => {
     if (isShuttingDown) return;
     // Process any remaining content in the buffer
     if (buffer.trim()) {
       processLine(buffer.trim());
     }
     // If no session was initialized and stdin ended cleanly, init now
+    // await ensures session is ready before the handler completes
     if (!currentSession) {
       log('Stdin ended, initializing session automatically');
-      handleInitRequest({}).catch((err) => {
+      await handleInitRequest({}).catch((err) => {
         log(`Auto-init error: ${err instanceof Error ? err.message : String(err)}`);
       });
     }
