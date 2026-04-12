@@ -73,7 +73,7 @@ export interface RoutedMessage {
  *
  * Example: "@agent_marketer strategy?" → ["marketer"]
  */
-const AGENT_MENTION_REGEX = /@agent_(\w+)/;
+const AGENT_MENTION_REGEX = /@agent_(\w+)/g;
 
 /**
  * Pattern for the mention-all trigger.

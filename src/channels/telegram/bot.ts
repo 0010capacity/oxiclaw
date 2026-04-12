@@ -350,9 +350,16 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
       // resolves on SIGTERM/SIGINT (shutdown). We must NOT await it —
       // awaiting would block the entire orchestrator startup.
       try {
-        bot.launch({
-          allowedUpdates: ['message', 'edited_message'],
-        });
+        bot
+          .launch({
+            allowedUpdates: ['message', 'edited_message'],
+          })
+          .then(() => {
+            logger.info('Telegraf polling stopped gracefully');
+          })
+          .catch((err: unknown) => {
+            logger.error({ err }, 'Telegraf polling error');
+          });
       } catch (err) {
         logger.error({ err }, 'Failed to launch Telegram bot');
         throw err;
@@ -368,7 +375,10 @@ function createTelegramChannel(opts: ChannelOpts): Channel | null {
       }
       const chatId = extractChatId(jid);
 
-      logger.info({ jid, chatId, textLen: text.length }, 'Telegram sendMessage START');
+      logger.info(
+        { jid, chatId, textLen: text.length },
+        'Telegram sendMessage START',
+      );
       try {
         await bot.telegram.sendMessage(chatId, sanitizeHtmlForTelegram(text));
         logger.info({ jid, chatId }, 'Telegram sendMessage SUCCESS');

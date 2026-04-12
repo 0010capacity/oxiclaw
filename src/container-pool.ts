@@ -61,9 +61,9 @@ export interface PooledContainer {
   groupFolder: string;
   process: ChildProcess;
   containerName: string;
-  isReady: boolean;       // init RPC has completed
-  isIdle: boolean;       // waiting for IPC input
-  lastUsed: number;       // timestamp of last prompt
+  isReady: boolean; // init RPC has completed
+  isIdle: boolean; // waiting for IPC input
+  lastUsed: number; // timestamp of last prompt
   pendingPromptResolve?: (output: ContainerOutput) => void;
   pendingPromptReject?: (err: Error) => void;
 }
@@ -164,7 +164,12 @@ export class ContainerPool {
   private ipcPollInterval: number;
   private shuttingDown = false;
 
-  constructor(projectRoot: string, _GROUPS_DIR: string, DATA_DIR: string, poolSize = 1) {
+  constructor(
+    projectRoot: string,
+    _GROUPS_DIR: string,
+    DATA_DIR: string,
+    poolSize = 1,
+  ) {
     this.projectRoot = projectRoot;
     this.DATA_DIR = DATA_DIR;
     this.poolSize = poolSize;
@@ -209,7 +214,11 @@ export class ContainerPool {
     }
 
     // Spawn new container
-    container = await this.spawnContainer(group, input.chatJid, input.groupFolder);
+    container = await this.spawnContainer(
+      group,
+      input.chatJid,
+      input.groupFolder,
+    );
     this.activeContainers.set(input.chatJid, container);
     return this.sendPromptToContainer(container, input);
   }
@@ -240,17 +249,28 @@ export class ContainerPool {
     if (!container) return;
 
     // Check if _close sentinel was written while this container was processing
-    const inputDir = path.join(this.DATA_DIR, 'ipc', container.groupFolder, 'input');
+    const inputDir = path.join(
+      this.DATA_DIR,
+      'ipc',
+      container.groupFolder,
+      'input',
+    );
     const closeSentinel = path.join(inputDir, '_close');
     if (fs.existsSync(closeSentinel)) {
-      logger.debug({ groupJid }, 'PooledContainer: _close sentinel found, shutting down');
+      logger.debug(
+        { groupJid },
+        'PooledContainer: _close sentinel found, shutting down',
+      );
       this.destroyContainer(container);
       this.activeContainers.delete(groupJid);
       return;
     }
 
     container.isIdle = true;
-    logger.debug({ groupJid, containerName: container.containerName }, 'PooledContainer: marked idle');
+    logger.debug(
+      { groupJid, containerName: container.containerName },
+      'PooledContainer: marked idle',
+    );
   }
 
   /**
@@ -259,28 +279,38 @@ export class ContainerPool {
    */
   prewarm(group: RegisteredGroup, groupJid: string): void {
     if (this.activeContainers.has(groupJid)) {
-      logger.debug({ groupJid }, 'PooledContainer: already active, skipping prewarm');
+      logger.debug(
+        { groupJid },
+        'PooledContainer: already active, skipping prewarm',
+      );
       return;
     }
 
     // Check if already in standby
-    const alreadyStandby = this.standbyContainers.some(c => c.groupFolder === group.folder);
+    const alreadyStandby = this.standbyContainers.some(
+      (c) => c.groupFolder === group.folder,
+    );
     if (alreadyStandby) {
-      logger.debug({ groupJid, folder: group.folder }, 'PooledContainer: already in standby');
+      logger.debug(
+        { groupJid, folder: group.folder },
+        'PooledContainer: already in standby',
+      );
       return;
     }
 
     // Spawn a warm container
-    this.spawnContainer(group, groupJid, group.folder).then((container) => {
-      // Put in standby pool — it will be assigned on next sendPrompt
-      this.standbyContainers.push(container);
-      logger.debug(
-        { groupJid, containerName: container.containerName },
-        'PooledContainer: prewarmed (standby)',
-      );
-    }).catch((err) => {
-      logger.error({ groupJid, err }, 'PooledContainer: prewarm failed');
-    });
+    this.spawnContainer(group, groupJid, group.folder)
+      .then((container) => {
+        // Put in standby pool — it will be assigned on next sendPrompt
+        this.standbyContainers.push(container);
+        logger.debug(
+          { groupJid, containerName: container.containerName },
+          'PooledContainer: prewarmed (standby)',
+        );
+      })
+      .catch((err) => {
+        logger.error({ groupJid, err }, 'PooledContainer: prewarm failed');
+      });
   }
 
   /**
@@ -290,7 +320,9 @@ export class ContainerPool {
     const container = this.activeContainers.get(groupJid);
     if (!container) {
       // Also check standby pool
-      const idx = this.standbyContainers.findIndex(c => c.groupJid === groupJid);
+      const idx = this.standbyContainers.findIndex(
+        (c) => c.groupJid === groupJid,
+      );
       if (idx >= 0) {
         this.destroyContainer(this.standbyContainers[idx]);
         this.standbyContainers.splice(idx, 1);
@@ -299,13 +331,24 @@ export class ContainerPool {
     }
 
     // Write _close sentinel so the container shuts down cleanly
-    const inputDir = path.join(this.DATA_DIR, 'ipc', container.groupFolder, 'input');
+    const inputDir = path.join(
+      this.DATA_DIR,
+      'ipc',
+      container.groupFolder,
+      'input',
+    );
     try {
       fs.mkdirSync(inputDir, { recursive: true });
       fs.writeFileSync(path.join(inputDir, '_close'), '');
-      logger.debug({ groupJid, containerName: container.containerName }, 'PooledContainer: _close sentinel written');
+      logger.debug(
+        { groupJid, containerName: container.containerName },
+        'PooledContainer: _close sentinel written',
+      );
     } catch (err) {
-      logger.warn({ groupJid, err }, 'PooledContainer: failed to write _close sentinel');
+      logger.warn(
+        { groupJid, err },
+        'PooledContainer: failed to write _close sentinel',
+      );
       this.destroyContainer(container);
     }
   }
@@ -354,16 +397,16 @@ export class ContainerPool {
     groupFolder: string,
   ): Promise<PooledContainer> {
     const isMain = group.isMain === true;
-    const mounts = buildVolumeMounts(
-      this.projectRoot,
-      group,
-      isMain,
-    );
+    const mounts = buildVolumeMounts(this.projectRoot, group, isMain);
 
     const safeName = groupFolder.replace(/[^a-zA-Z0-9-]/g, '-');
     const containerName = `oxiclaw-${safeName}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
-    const containerArgs = await buildContainerArgsForPool(mounts, containerName, group);
+    const containerArgs = await buildContainerArgsForPool(
+      mounts,
+      containerName,
+      group,
+    );
 
     logger.debug(
       { group: group.name, containerName, mountCount: mounts.length },
@@ -408,7 +451,10 @@ export class ContainerPool {
     });
 
     container.on('error', (err) => {
-      logger.error({ group: group.name, containerName, err }, 'Container spawn error');
+      logger.error(
+        { group: group.name, containerName, err },
+        'Container spawn error',
+      );
       if (pooled.pendingPromptReject) {
         pooled.pendingPromptReject(err);
         pooled.pendingPromptResolve = undefined;
@@ -523,17 +569,15 @@ export class ContainerPool {
         },
       };
 
+      logger.debug(
+        { containerName: container.containerName, promptRpcId: promptRequest.id },
+        'PooledContainer: sending prompt',
+      );
+
       container.lastUsed = Date.now();
       container.isIdle = false;
       container.pendingPromptResolve = resolve;
       container.pendingPromptReject = reject;
-
-      // Write prompt to stdin (DO NOT call stdin.end() — keep container alive)
-      if (!container.process.stdin?.writable) {
-        reject(new Error('Container stdin not writable'));
-        return;
-      }
-      container.process.stdin.write(JSON.stringify(promptRequest) + '\n');
 
       // Parse responses from stdout
       let lineBuffer = '';
@@ -541,33 +585,50 @@ export class ContainerPool {
       const handleData = (data: Buffer) => {
         const chunk = data.toString();
         logger.debug(
-          { containerName: container.containerName, chunkLen: chunk.length },
+          {
+            containerName: container.containerName,
+            chunkLen: chunk.length,
+            preview: JSON.stringify(chunk.slice(0, 220)),
+          },
           'PooledContainer: stdout chunk',
         );
         lineBuffer += chunk;
         const lines = lineBuffer.split('\n');
         lineBuffer = lines.pop() || '';
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
+        const tryResolveFromJson = (jsonText: string): boolean => {
           try {
-            const msg = JSON.parse(trimmed) as JsonRpcResponse;
+            const msg = JSON.parse(jsonText) as JsonRpcResponse;
+            if ('id' in msg && msg.id != null) {
+              logger.debug(
+                {
+                  containerName: container.containerName,
+                  parsedRpcId: msg.id,
+                  expectedRpcId: promptRequest.id,
+                },
+                'PooledContainer: parsed RPC response',
+              );
+            }
 
             if ('id' in msg && msg.id != null && msg.id === promptRequest.id) {
               // Remove handler to prevent double-calling
               container.process.stdout?.off('data', handleData);
 
-              const result = msg.result as {
-                session_id?: string;
-                content?: string;
-                tool_calls?: Array<{ name: string; params: Record<string, unknown> }>;
-                images?: string[];
-              } | undefined;
+              const result = msg.result as
+                | {
+                    session_id?: string;
+                    content?: string;
+                    tool_calls?: Array<{
+                      name: string;
+                      params: Record<string, unknown>;
+                    }>;
+                    images?: string[];
+                  }
+                | undefined;
 
               const output: ContainerOutput = {
                 status: msg.error ? 'error' : 'success',
-                result: msg.error ? null : (result?.content || null),
+                result: msg.error ? null : result?.content || null,
                 newSessionId: result?.session_id,
                 images: result?.images,
                 error: msg.error?.message,
@@ -576,15 +637,40 @@ export class ContainerPool {
               resolve(output);
               container.pendingPromptResolve = undefined;
               container.pendingPromptReject = undefined;
-              return;
+              return true;
             }
           } catch {
-            // Not JSON, skip
+            // Not complete JSON yet
           }
+          return false;
+        };
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          if (tryResolveFromJson(trimmed)) return;
+        }
+
+        // Fallback: some environments may emit a full JSON response without a
+        // trailing newline. Try parsing the current buffer as a complete JSON object.
+        const buffered = lineBuffer.trim();
+        if (buffered && tryResolveFromJson(buffered)) {
+          lineBuffer = '';
+          return;
         }
       };
 
+      // IMPORTANT: attach stdout handler BEFORE writing prompt to avoid races
+      // where very fast responses arrive before listener registration.
       container.process.stdout?.on('data', handleData);
+
+      // Write prompt to stdin (DO NOT call stdin.end() — keep container alive)
+      if (!container.process.stdin?.writable) {
+        container.process.stdout?.off('data', handleData);
+        reject(new Error('Container stdin not writable'));
+        return;
+      }
+      container.process.stdin.write(JSON.stringify(promptRequest) + '\n');
     });
   }
 

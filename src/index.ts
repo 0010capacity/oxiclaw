@@ -114,6 +114,8 @@ let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
+// Prevent concurrent prompt submissions to the same chat container.
+const processingChats = new Set<string>();
 
 const channels: Channel[] = [];
 let pool: ContainerPool | null = null;
@@ -218,12 +220,17 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
  * Returns groups ordered by most recent activity.
  */
 // Cache available groups for 5 seconds (avoids full chats scan on every prompt)
-let availableGroupsCache: import('./container-runner.js').AvailableGroup[] | null = null;
+let availableGroupsCache:
+  | import('./container-runner.js').AvailableGroup[]
+  | null = null;
 let availableGroupsCacheAt = 0;
 const AVAILABLE_GROUPS_TTL_MS = 5_000;
 
 export function getAvailableGroups(): import('./container-runner.js').AvailableGroup[] {
-  if (availableGroupsCache && Date.now() - availableGroupsCacheAt < AVAILABLE_GROUPS_TTL_MS) {
+  if (
+    availableGroupsCache &&
+    Date.now() - availableGroupsCacheAt < AVAILABLE_GROUPS_TTL_MS
+  ) {
     return availableGroupsCache;
   }
   const chats = getAllChats();
@@ -246,7 +253,7 @@ export function _setRegisteredGroups(
   groups: Record<string, RegisteredGroup>,
 ): void {
   registeredGroups = groups;
-  availableGroupsCache = null;  // invalidate when groups change
+  availableGroupsCache = null; // invalidate when groups change
 }
 
 /**
@@ -254,8 +261,15 @@ export function _setRegisteredGroups(
  * Called by the GroupQueue when it's this group's turn.
  */
 async function processGroupMessages(chatJid: string): Promise<boolean> {
-  const group = registeredGroups[chatJid];
-  if (!group) return true;
+  if (processingChats.has(chatJid)) {
+    logger.debug({ chatJid }, 'Chat already processing, skipping');
+    return true;
+  }
+
+  processingChats.add(chatJid);
+  try {
+    const group = registeredGroups[chatJid];
+    if (!group) return true;
 
   const channel = findChannel(channels, chatJid);
   if (!channel) {
@@ -355,7 +369,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     return false;
   }
 
-  return true;
+    return true;
+  } finally {
+    processingChats.delete(chatJid);
+  }
 }
 
 async function runAgent(
@@ -441,6 +458,11 @@ async function runAgent(
     if (output.newSessionId) {
       sessions[group.folder] = output.newSessionId;
       setSession(group.folder, output.newSessionId);
+    }
+
+    // Forward container output to caller (e.g. Telegram send pipeline).
+    if (wrappedOnOutput) {
+      await wrappedOnOutput(output);
     }
 
     if (output.status === 'error') {
@@ -561,49 +583,9 @@ async function startMessageLoop(): Promise<void> {
             if (!hasTrigger) continue;
           }
 
-          // Pull all messages since lastAgentTimestamp so non-trigger
-          // context that accumulated between triggers is included.
-          const allPending = getMessagesSince(
-            chatJid,
-            getOrRecoverCursor(chatJid),
-            ASSISTANT_NAME,
-            MAX_MESSAGES_PER_PROMPT,
+          processGroupMessages(chatJid).catch((err) =>
+            logger.error({ chatJid, err }, 'Error processing group messages'),
           );
-          const messagesToSend =
-            allPending.length > 0 ? allPending : groupMessages;
-          const formatted = formatMessages(messagesToSend, TIMEZONE);
-
-          if (getPool().getContainerName(chatJid)) {
-            // Container is active — pipe message via IPC input file
-            getPool().markIdle(chatJid); // reset idle state before new work
-            getPool().getContainerName(chatJid); // ensure container is ready
-            // Send via IPC input file (the container polls this directory)
-            const inputDir = path.join(DATA_DIR, 'ipc', group.folder, 'input');
-            fs.mkdirSync(inputDir, { recursive: true });
-            const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.json`;
-            const filepath = path.join(inputDir, filename);
-            const tempPath = `${filepath}.tmp`;
-            fs.writeFileSync(tempPath, JSON.stringify({ type: 'message', text: formatted }));
-            fs.renameSync(tempPath, filepath);
-            logger.debug(
-              { chatJid, count: messagesToSend.length },
-              'Piped messages to active container via IPC',
-            );
-            lastAgentTimestamp[chatJid] =
-              messagesToSend[messagesToSend.length - 1].timestamp;
-            saveState();
-            // Show typing indicator while the container processes the piped message
-            channel
-              .setTyping?.(chatJid, true)
-              ?.catch((err) =>
-                logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
-              );
-          } else {
-            // No active container — process synchronously via the pool
-            processGroupMessages(chatJid).catch((err) =>
-              logger.error({ chatJid, err }, 'Error processing group messages'),
-            );
-          }
         }
       }
     } catch (err) {
@@ -1036,36 +1018,38 @@ async function main(): Promise<void> {
             });
             getPool().closeContainer(msg.chatJid);
             return output;
-          })().then(async (output) => {
-            setAgentStatus(msg.chatJid, agentName, 'idle');
-            if (output.status === 'error') {
-              logger.error(
-                { agentName, chatJid: msg.chatJid, error: output.error },
-                'Swarm agent container error',
-              );
-            }
-            return output;
-          }).catch((err) => {
-            setAgentStatus(msg.chatJid, agentName, 'error');
-            logger.error(
-              { agentName, chatJid: msg.chatJid, err },
-              'Swarm agent container spawn error',
-            );
-            getPool().closeContainer(msg.chatJid);
-            swarmRouter!
-              .deliverResponse(
-                msg.chatJid,
-                agentName,
-                `Error: ${err instanceof Error ? err.message : String(err)}`,
-                msg.messageId,
-              )
-              .catch((e) =>
+          })()
+            .then(async (output) => {
+              setAgentStatus(msg.chatJid, agentName, 'idle');
+              if (output.status === 'error') {
                 logger.error(
-                  { err: e },
-                  'Failed to deliver error to Telegram',
-                ),
+                  { agentName, chatJid: msg.chatJid, error: output.error },
+                  'Swarm agent container error',
+                );
+              }
+              return output;
+            })
+            .catch((err) => {
+              setAgentStatus(msg.chatJid, agentName, 'error');
+              logger.error(
+                { agentName, chatJid: msg.chatJid, err },
+                'Swarm agent container spawn error',
               );
-          });;
+              getPool().closeContainer(msg.chatJid);
+              swarmRouter!
+                .deliverResponse(
+                  msg.chatJid,
+                  agentName,
+                  `Error: ${err instanceof Error ? err.message : String(err)}`,
+                  msg.messageId,
+                )
+                .catch((e) =>
+                  logger.error(
+                    { err: e },
+                    'Failed to deliver error to Telegram',
+                  ),
+                );
+            });
         }),
       );
 

@@ -60,7 +60,15 @@ function respond(id: string | number | null, result?: unknown, error?: { code: n
     id,
     ...(error ? { error } : { result }),
   };
-  process.stdout.write(JSON.stringify(response) + '\n');
+  // Use writeSync via fs to ensure the full response is flushed to the stdout
+  // pipe immediately. Regular write() may buffer partial data when stdout is
+  // a Docker pipe, causing the host to receive truncated JSON-RPC messages.
+  const payload = JSON.stringify(response) + '\n';
+  try {
+    fs.writeSync(1, payload);
+  } catch {
+    process.stdout.write(payload);
+  }
 }
 
 interface PromptResult {
@@ -348,12 +356,16 @@ async function main(): Promise<void> {
   log(`Starting OxiClaw agent runner (session=${SESSION_ID}, cwd=${CWD})`);
 
   ipcBridge = new IPCBridge(ORCHESTRATOR_SOCKET);
-  try {
-    await ipcBridge.connect();
-    log('IPC bridge connected');
-  } catch (err) {
-    log(`IPC bridge connection failed: ${err instanceof Error ? err.message : String(err)}`);
-    log('Continuing without IPC bridge');
+  if (!fs.existsSync(ORCHESTRATOR_SOCKET)) {
+    log(`IPC bridge socket not found (${ORCHESTRATOR_SOCKET}), skipping connect`);
+  } else {
+    try {
+      await ipcBridge.connect();
+      log('IPC bridge connected');
+    } catch (err) {
+      log(`IPC bridge connection failed: ${err instanceof Error ? err.message : String(err)}`);
+      log('Continuing without IPC bridge');
+    }
   }
 
   // Start IPC input polling for follow-up messages
