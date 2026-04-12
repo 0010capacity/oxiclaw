@@ -271,103 +271,103 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     const group = registeredGroups[chatJid];
     if (!group) return true;
 
-  const channel = findChannel(channels, chatJid);
-  if (!channel) {
-    logger.warn({ chatJid }, 'No channel owns JID, skipping messages');
-    return true;
-  }
-
-  const isMainGroup = group.isMain === true;
-
-  const missedMessages = getMessagesSince(
-    chatJid,
-    getOrRecoverCursor(chatJid),
-    ASSISTANT_NAME,
-    MAX_MESSAGES_PER_PROMPT,
-  );
-
-  if (missedMessages.length === 0) return true;
-
-  // For non-main groups, check if trigger is required and present
-  if (!isMainGroup && group.requiresTrigger !== false) {
-    const triggerPattern = getTriggerPattern(group.trigger);
-    const allowlistCfg = loadSenderAllowlist();
-    const hasTrigger = missedMessages.some(
-      (m) =>
-        triggerPattern.test(m.content.trim()) &&
-        (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
-    );
-    if (!hasTrigger) return true;
-  }
-
-  const prompt = formatMessages(missedMessages, TIMEZONE);
-
-  // Advance cursor so the piping path in startMessageLoop won't re-fetch
-  // these messages. Save the old cursor so we can roll back on error.
-  const previousCursor = lastAgentTimestamp[chatJid] || '';
-  lastAgentTimestamp[chatJid] =
-    missedMessages[missedMessages.length - 1].timestamp;
-  saveState();
-
-  logger.info(
-    { group: group.name, messageCount: missedMessages.length },
-    'Processing messages',
-  );
-
-  await channel.setTyping?.(chatJid, true);
-  let hadError = false;
-  let outputSentToUser = false;
-
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
-      }
-      // Check for autonomous message triggers after each agent response
-      const autoManager = getAutonomousMessageManager();
-      if (autoManager) {
-        const sessionId = `group-${group.folder}`;
-        await autoManager.handleAgentResponse(sessionId, chatJid, text);
-      }
-    }
-
-    if (result.status === 'success') {
-      getPool().markIdle(chatJid);
-    }
-
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
-
-  await channel.setTyping?.(chatJid, false);
-
-  if (output === 'error' || hadError) {
-    // If we already sent output to the user, don't roll back the cursor —
-    // the user got their response and re-processing would send duplicates.
-    if (outputSentToUser) {
-      logger.warn(
-        { group: group.name },
-        'Agent error after output was sent, skipping cursor rollback to prevent duplicates',
-      );
+    const channel = findChannel(channels, chatJid);
+    if (!channel) {
+      logger.warn({ chatJid }, 'No channel owns JID, skipping messages');
       return true;
     }
-    // Roll back cursor so retries can re-process these messages
-    lastAgentTimestamp[chatJid] = previousCursor;
-    saveState();
-    logger.warn(
-      { group: group.name },
-      'Agent error, rolled back message cursor for retry',
+
+    const isMainGroup = group.isMain === true;
+
+    const missedMessages = getMessagesSince(
+      chatJid,
+      getOrRecoverCursor(chatJid),
+      ASSISTANT_NAME,
+      MAX_MESSAGES_PER_PROMPT,
     );
-    return false;
-  }
+
+    if (missedMessages.length === 0) return true;
+
+    // For non-main groups, check if trigger is required and present
+    if (!isMainGroup && group.requiresTrigger !== false) {
+      const triggerPattern = getTriggerPattern(group.trigger);
+      const allowlistCfg = loadSenderAllowlist();
+      const hasTrigger = missedMessages.some(
+        (m) =>
+          triggerPattern.test(m.content.trim()) &&
+          (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
+      );
+      if (!hasTrigger) return true;
+    }
+
+    const prompt = formatMessages(missedMessages, TIMEZONE);
+
+    // Advance cursor so the piping path in startMessageLoop won't re-fetch
+    // these messages. Save the old cursor so we can roll back on error.
+    const previousCursor = lastAgentTimestamp[chatJid] || '';
+    lastAgentTimestamp[chatJid] =
+      missedMessages[missedMessages.length - 1].timestamp;
+    saveState();
+
+    logger.info(
+      { group: group.name, messageCount: missedMessages.length },
+      'Processing messages',
+    );
+
+    await channel.setTyping?.(chatJid, true);
+    let hadError = false;
+    let outputSentToUser = false;
+
+    const output = await runAgent(group, prompt, chatJid, async (result) => {
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        if (text) {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
+        // Check for autonomous message triggers after each agent response
+        const autoManager = getAutonomousMessageManager();
+        if (autoManager) {
+          const sessionId = `group-${group.folder}`;
+          await autoManager.handleAgentResponse(sessionId, chatJid, text);
+        }
+      }
+
+      if (result.status === 'success') {
+        getPool().markIdle(chatJid);
+      }
+
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    });
+
+    await channel.setTyping?.(chatJid, false);
+
+    if (output === 'error' || hadError) {
+      // If we already sent output to the user, don't roll back the cursor —
+      // the user got their response and re-processing would send duplicates.
+      if (outputSentToUser) {
+        logger.warn(
+          { group: group.name },
+          'Agent error after output was sent, skipping cursor rollback to prevent duplicates',
+        );
+        return true;
+      }
+      // Roll back cursor so retries can re-process these messages
+      lastAgentTimestamp[chatJid] = previousCursor;
+      saveState();
+      logger.warn(
+        { group: group.name },
+        'Agent error, rolled back message cursor for retry',
+      );
+      return false;
+    }
 
     return true;
   } finally {
